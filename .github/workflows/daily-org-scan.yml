@@ -78,7 +78,7 @@ jobs:
               return sanitize_string_input(name, max_length=39)
 
           def validate_repo_name(name):
-              """Validate repository name format."""
+              """Validate repository name format (single repo name, no org prefix)."""
               if not name or not isinstance(name, str):
                   raise ValueError("Repository name must be a non-empty string")
               # GitHub repo names: alphanumeric, hyphens, underscores, dots, max 100 chars
@@ -87,6 +87,27 @@ jobs:
               if len(name) > 100:
                   raise ValueError(f"Repository name too long: {name}")
               return sanitize_string_input(name, max_length=100)
+          
+          def validate_repo_full_name(full_name):
+              """Validate full repository name format (org/repo)."""
+              if not full_name or not isinstance(full_name, str):
+                  raise ValueError("Repository full name must be a non-empty string")
+              # Full name format: org/repo
+              if '/' not in full_name:
+                  raise ValueError(f"Full repository name must be in format 'org/repo': {full_name}")
+              parts = full_name.split('/', 1)
+              if len(parts) != 2:
+                  raise ValueError(f"Invalid full repository name format: {full_name}")
+              org_part, repo_part = parts
+              # Validate org part
+              if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$', org_part):
+                  raise ValueError(f"Invalid organization name in full name: {full_name}")
+              # Validate repo part
+              if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$', repo_part):
+                  raise ValueError(f"Invalid repository name in full name: {full_name}")
+              if len(full_name) > 200:  # org (39) + / + repo (100) + buffer
+                  raise ValueError(f"Full repository name too long: {full_name}")
+              return sanitize_string_input(full_name, max_length=200)
 
           # Validate and sanitize inputs
           private_key = None
@@ -178,7 +199,7 @@ jobs:
               for repo in org.get_repos():
                   try:
                       repo_name = validate_repo_name(repo.name)
-                      repo_full_name = validate_repo_name(repo.full_name)
+                      repo_full_name = validate_repo_full_name(repo.full_name)
                       repos.append({
                           'name': repo_name,
                           'full_name': repo_full_name,
