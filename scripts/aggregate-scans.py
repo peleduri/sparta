@@ -20,6 +20,15 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Any, Set
 
+# Import security utilities
+try:
+    from security_utils import sanitize_path
+except ImportError:
+    # Fallback if running from different directory
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from security_utils import sanitize_path
+
 
 def load_scan_reports(reports_dir: Path) -> List[Dict[str, Any]]:
     """
@@ -254,8 +263,17 @@ Examples:
     
     args = parser.parse_args()
     
+    # Sanitize and validate paths
+    try:
+        base_dir = Path.cwd()
+        sanitized_reports_dir = sanitize_path(str(args.reports_dir), base_dir)
+        sanitized_output_dir = sanitize_path(str(args.output_dir), base_dir)
+    except ValueError as e:
+        print(f"Error: Invalid path: {e}", file=sys.stderr)
+        sys.exit(1)
+    
     print("Loading scan reports...")
-    reports = load_scan_reports(args.reports_dir)
+    reports = load_scan_reports(sanitized_reports_dir)
     
     if not reports:
         print("No reports found.", file=sys.stderr)
@@ -267,29 +285,29 @@ Examples:
     stats = aggregate_statistics(reports)
     
     # Create output directory
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    sanitized_output_dir.mkdir(parents=True, exist_ok=True)
     
     # Save aggregated data
-    stats_file = args.output_dir / 'statistics.json'
+    stats_file = sanitized_output_dir / 'statistics.json'
     with open(stats_file, 'w') as f:
         json.dump(stats, f, indent=2)
     print(f"Saved statistics to {stats_file}")
     
     # Save CVE index
-    cve_index_file = args.output_dir / 'cve-index.json'
+    cve_index_file = sanitized_output_dir / 'cve-index.json'
     with open(cve_index_file, 'w') as f:
         json.dump(dict(stats['cve_index']), f, indent=2)
     print(f"Saved CVE index to {cve_index_file}")
     
     # Save repository summary
-    repo_summary_file = args.output_dir / 'repository-summary.json'
+    repo_summary_file = sanitized_output_dir / 'repository-summary.json'
     with open(repo_summary_file, 'w') as f:
         json.dump(dict(stats['repo_vulnerabilities']), f, indent=2)
     print(f"Saved repository summary to {repo_summary_file}")
     
     # Generate and save summary report
     summary_report = generate_summary_report(stats)
-    summary_file = args.output_dir / 'summary.txt'
+    summary_file = sanitized_output_dir / 'summary.txt'
     with open(summary_file, 'w') as f:
         f.write(summary_report)
     print(f"Saved summary report to {summary_file}")
@@ -297,7 +315,7 @@ Examples:
     # Print summary to console
     print("\n" + summary_report)
     
-    print(f"\nAggregation complete. Output saved to {args.output_dir}/")
+    print(f"\nAggregation complete. Output saved to {sanitized_output_dir}/")
 
 
 if __name__ == '__main__':

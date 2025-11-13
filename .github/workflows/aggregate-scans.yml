@@ -57,8 +57,30 @@ jobs:
           from collections import defaultdict
           from datetime import datetime
 
-          reports_dir = Path(os.environ['REPORTS_DIR'])
-          output_dir = Path(os.environ['OUTPUT_DIR'])
+          # Path sanitization function
+          def sanitize_path(user_path: str, base_dir: Path) -> Path:
+              if not user_path or not isinstance(user_path, str):
+                  raise ValueError("Path must be a non-empty string")
+              base_dir = Path(base_dir).resolve()
+              user_path = Path(user_path)
+              if user_path.is_absolute():
+                  resolved = user_path.resolve()
+              else:
+                  resolved = (base_dir / user_path).resolve()
+              try:
+                  resolved.relative_to(base_dir)
+              except ValueError:
+                  raise ValueError(f"Path traversal detected: {user_path} resolves outside base directory")
+              return resolved
+
+          # Sanitize and validate paths
+          try:
+              base_dir = Path.cwd()
+              reports_dir = sanitize_path(os.environ['REPORTS_DIR'], base_dir)
+              output_dir = sanitize_path(os.environ['OUTPUT_DIR'], base_dir)
+          except ValueError as e:
+              print(f"Error: Invalid path: {e}")
+              sys.exit(1)
 
           def load_scan_reports(reports_dir):
               reports = []

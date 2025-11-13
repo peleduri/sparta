@@ -111,14 +111,69 @@ jobs:
               report_dir.mkdir(parents=True, exist_ok=True)
               
               try:
-                  # Clone repository
-                  clone_url = f"https://{token}@github.com/{repo_full_name}.git"
+                  # Clone repository securely without exposing token in URL
+                  # Use git credential helper to avoid token in URL
+                  clone_url = f"https://github.com/{repo_full_name}.git"
+                  
+                  # Configure git to use token from environment
+                  env = os.environ.copy()
+                  env['GIT_TERMINAL_PROMPT'] = '0'
+                  
+                  # Set up credential helper to use token from environment
+                  credential_url = f"https://{token}@github.com"
                   subprocess.run(
-                      ['git', 'clone', '--depth', '1', '--branch', default_branch, clone_url, str(repo_dir)],
+                      ['git', 'config', '--global', 'credential.helper', 'store'],
                       check=True,
                       capture_output=True,
-                      timeout=300
+                      timeout=10
                   )
+                  
+                  # Write credential to temporary location (git credential store format)
+                  import tempfile
+                  cred_file = os.path.join(tempfile.gettempdir(), f'git-cred-{repo_name}')
+                  with open(cred_file, 'w') as f:
+                      f.write(credential_url + '\n')
+                  
+                  # Configure git to use the credential file
+                  subprocess.run(
+                      ['git', 'config', '--global', f'credential.helper', f'store --file={cred_file}'],
+                      check=True,
+                      capture_output=True,
+                      timeout=10
+                  )
+                  
+                  # Clone repository
+                  clone_result = subprocess.run(
+                      ['git', 'clone', '--depth', '1', '--branch', default_branch, clone_url, str(repo_dir)],
+                      check=False,
+                      capture_output=True,
+                      text=True,
+                      timeout=300,
+                      env=env
+                  )
+                  
+                  # Clean up credential file
+                  try:
+                      if os.path.exists(cred_file):
+                          os.unlink(cred_file)
+                  except Exception:
+                      pass
+                  
+                  # Reset credential helper
+                  try:
+                      subprocess.run(
+                          ['git', 'config', '--global', '--unset', 'credential.helper'],
+                          capture_output=True,
+                          timeout=10
+                      )
+                  except Exception:
+                      pass
+                  
+                  if clone_result.returncode != 0:
+                      error_msg = clone_result.stderr[:200] if clone_result.stderr else 'Unknown error'
+                      # Sanitize error message to remove any potential token exposure
+                      error_msg = error_msg.replace(token, "***") if token in error_msg else error_msg
+                      raise Exception(f"Git clone failed: {error_msg}")
                   
                   # Run Trivy scan
                   result = subprocess.run(

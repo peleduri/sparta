@@ -73,13 +73,50 @@ jobs:
           import os
           import json
           import sys
+          import re
           from pathlib import Path
+
+          # CVE validation function
+          def validate_cve_id(cve_id: str) -> bool:
+              if not cve_id or not isinstance(cve_id, str):
+                  return False
+              pattern = r'^CVE-\d{4}-\d{4,}$'
+              return bool(re.match(pattern, cve_id.upper()))
+          
+          # Path sanitization function
+          def sanitize_path(user_path: str, base_dir: Path) -> Path:
+              if not user_path or not isinstance(user_path, str):
+                  raise ValueError("Path must be a non-empty string")
+              base_dir = Path(base_dir).resolve()
+              user_path = Path(user_path)
+              if user_path.is_absolute():
+                  resolved = user_path.resolve()
+              else:
+                  resolved = (base_dir / user_path).resolve()
+              try:
+                  resolved.relative_to(base_dir)
+              except ValueError:
+                  raise ValueError(f"Path traversal detected: {user_path} resolves outside base directory")
+              return resolved
 
           cve_id = os.environ.get('CVE_ID', '').upper()
           if not cve_id:
               print("Error: CVE ID is required")
               sys.exit(1)
-          reports_dir = Path(os.environ['REPORTS_DIR'])
+          
+          # Validate CVE format
+          if not validate_cve_id(cve_id):
+              print(f"Error: Invalid CVE ID format: '{cve_id}'. Expected format: CVE-YYYY-NNNN+")
+              sys.exit(1)
+          
+          # Sanitize and validate reports directory path
+          try:
+              base_dir = Path.cwd()
+              reports_dir = sanitize_path(os.environ['REPORTS_DIR'], base_dir)
+          except ValueError as e:
+              print(f"Error: Invalid reports directory path: {e}")
+              sys.exit(1)
+          
           output_format = os.environ.get('OUTPUT_FORMAT', 'table')
 
           findings = []

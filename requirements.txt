@@ -1,3 +1,10 @@
-requests>=2.31.0
-PyGithub>=2.1.1
+# Pinned dependencies for security and reproducibility
+# Last updated: 2024-11-13
+# Use 'pip install --upgrade' to check for newer versions
+
+# HTTP library - latest stable version as of 2024
+requests==2.31.0
+
+# GitHub API library - latest stable version as of 2024
+PyGithub==2.1.1
 

@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
 
+# Import security utilities
+try:
+    from security_utils import validate_cve_id, sanitize_path
+except ImportError:
+    # Fallback if running from different directory
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from security_utils import validate_cve_id, sanitize_path
+
 
 def find_cve_in_reports(cve_id: str, reports_dir: Path) -> List[Dict[str, Any]]:
     """
@@ -174,12 +183,22 @@ Examples:
     
     args = parser.parse_args()
     
-    # Validate CVE format (basic check)
-    if not args.cve_id.upper().startswith('CVE-'):
-        print(f"Warning: CVE ID '{args.cve_id}' doesn't start with 'CVE-'", file=sys.stderr)
+    # Validate CVE format
+    cve_id_upper = args.cve_id.upper()
+    if not validate_cve_id(cve_id_upper):
+        print(f"Error: Invalid CVE ID format: '{args.cve_id}'. Expected format: CVE-YYYY-NNNN+", file=sys.stderr)
+        sys.exit(1)
+    
+    # Sanitize and validate reports directory path
+    try:
+        base_dir = Path.cwd()
+        sanitized_reports_dir = sanitize_path(str(args.reports_dir), base_dir)
+    except ValueError as e:
+        print(f"Error: Invalid reports directory path: {e}", file=sys.stderr)
+        sys.exit(1)
     
     # Search for CVE
-    findings = find_cve_in_reports(args.cve_id.upper(), args.reports_dir)
+    findings = find_cve_in_reports(cve_id_upper, sanitized_reports_dir)
     
     # Format and print output
     output = format_output(findings, args.format)
