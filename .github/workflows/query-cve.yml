@@ -1,6 +1,9 @@
 name: Query CVE
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       cve-id:
