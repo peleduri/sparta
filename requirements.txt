@@ -10,7 +10,3 @@ requests==2.32.5
 # https://github.com/PyGithub/PyGithub/releases/tag/v2.8.1
 PyGithub==2.8.1
 
-# JWT library for GitHub App authentication
-# Required for generating JWT tokens for GitHub App auth
-PyJWT==2.10.1
-

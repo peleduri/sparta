@@ -1,4 +1,4 @@
-name: Example - Call Package Vulnerability Scan
+name: Sparta - Example Caller
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ on:
 jobs:
   vulnerability-scan:
     name: Run Vulnerability Scan
-    uses: ./.github/workflows/package-vulnerability-scan.yml
+    uses: ./.github/workflows/sparta-package-vulnerability-scan.yml
     # Optional: Override default inputs
     # with:
     #   scan-ref: '.'

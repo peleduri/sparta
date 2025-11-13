@@ -15,7 +15,7 @@ This solution provides:
 
 ### 1. Reusable Workflow for PR Checks
 
-**File**: `.github/workflows/package-vulnerability-scan.yml`
+**File**: `.github/workflows/sparta-package-vulnerability-scan.yml`
 
 This is a reusable workflow that can be called from any repository in your organization to scan for vulnerabilities. It will fail the check if HIGH or CRITICAL vulnerabilities are found.
 
@@ -36,7 +36,7 @@ on:
 jobs:
   vulnerability-scan:
     name: Run Vulnerability Scan
-    uses: security-pillar-ai-poc/sparta/.github/workflows/package-vulnerability-scan.yml@main
+    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-package-vulnerability-scan.yml@main
     # Optional: Override default inputs
     # with:
     #   scan-ref: '.'
@@ -64,7 +64,7 @@ The workflow uses the following Trivy configuration:
 
 ### 2. Daily Organization Scan
 
-**File**: `.github/workflows/daily-org-scan.yml`
+**File**: `.github/workflows/sparta-daily-org-scan.yml`
 
 This workflow runs daily (at 2 AM UTC) and scans all repositories in your GitHub organization. Results are stored in the `vulnerability-reports/` directory structure.
 
@@ -99,7 +99,7 @@ vulnerability-reports/
 
 ### 3. CVE Query Workflow
 
-**File**: `.github/workflows/query-cve.yml`
+**File**: `.github/workflows/sparta-query-cve.yml`
 
 A reusable GitHub Actions workflow to search for specific CVEs across all stored scan results.
 
@@ -121,7 +121,7 @@ on:
 jobs:
   query:
     name: Query CVE
-    uses: security-pillar-ai-poc/sparta/.github/workflows/query-cve.yml@main
+    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-query-cve.yml@main
     with:
       cve-id: ${{ inputs.cve-id }}
       reports-dir: 'vulnerability-reports'
@@ -133,7 +133,7 @@ Or call it directly from another workflow:
 ```yaml
 jobs:
   query-cve:
-    uses: security-pillar-ai-poc/sparta/.github/workflows/query-cve.yml@main
+    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-query-cve.yml@main
     with:
       cve-id: 'CVE-2024-1234'
       output-format: 'table'
@@ -178,7 +178,7 @@ The workflow will display results in the GitHub Actions summary and save them as
 
 ### 4. Aggregation Workflow
 
-**File**: `.github/workflows/aggregate-scans.yml`
+**File**: `.github/workflows/sparta-aggregate-scans.yml`
 
 A reusable GitHub Actions workflow to aggregate and index all scan results for faster querying and reporting.
 
@@ -197,7 +197,7 @@ on:
 jobs:
   aggregate:
     name: Aggregate Scan Results
-    uses: security-pillar-ai-poc/sparta/.github/workflows/aggregate-scans.yml@main
+    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-aggregate-scans.yml@main
     with:
       reports-dir: 'vulnerability-reports'
       output-dir: 'aggregated'
@@ -267,7 +267,7 @@ The aggregation workflow requires:
 
 ### Changing Scan Schedule
 
-Edit `.github/workflows/daily-org-scan.yml` and modify the cron schedule:
+Edit `.github/workflows/sparta-daily-org-scan.yml` and modify the cron schedule:
 
 ```yaml
 on:

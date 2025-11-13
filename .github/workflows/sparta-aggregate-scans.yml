@@ -1,4 +1,4 @@
-name: Aggregate Scan Results
+name: Sparta - Aggregate Scan Results
 
 on:
   push:
@@ -31,7 +31,7 @@ on:
 
 jobs:
   aggregate:
-    name: Aggregate Scan Results
+    name: Sparta - Aggregate Scan Results
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,6 +43,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Setup security utilities
+        run: |
+          mkdir -p /tmp/sparta_utils
+          cp scripts/security_utils.py /tmp/sparta_utils/
 
       - name: Aggregate scan results
         env:
@@ -56,22 +61,10 @@ jobs:
           from pathlib import Path
           from collections import defaultdict
           from datetime import datetime
-
-          # Path sanitization function
-          def sanitize_path(user_path: str, base_dir: Path) -> Path:
-              if not user_path or not isinstance(user_path, str):
-                  raise ValueError("Path must be a non-empty string")
-              base_dir = Path(base_dir).resolve()
-              user_path = Path(user_path)
-              if user_path.is_absolute():
-                  resolved = user_path.resolve()
-              else:
-                  resolved = (base_dir / user_path).resolve()
-              try:
-                  resolved.relative_to(base_dir)
-              except ValueError:
-                  raise ValueError(f"Path traversal detected: {user_path} resolves outside base directory")
-              return resolved
+          
+          # Import security utilities
+          sys.path.insert(0, '/tmp/sparta_utils')
+          from security_utils import sanitize_path
 
           # Sanitize and validate paths
           try:

@@ -198,3 +198,106 @@ def sanitize_string_input(input_str: str, max_length: int = 1000, allowed_chars:
     
     return sanitized
 
+
+def validate_org_name(name: str) -> str:
+    """
+    Validate organization name format.
+    
+    GitHub org names: alphanumeric, hyphens, underscores, max 39 chars
+    
+    Args:
+        name: Organization name to validate
+        
+    Returns:
+        Sanitized organization name
+        
+    Raises:
+        ValueError: If organization name is invalid
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError("Organization name must be a non-empty string")
+    # GitHub org names: alphanumeric, hyphens, underscores, max 39 chars
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$', name):
+        raise ValueError(f"Invalid organization name format: {name}")
+    if len(name) > 39:
+        raise ValueError(f"Organization name too long: {name}")
+    return sanitize_string_input(name, max_length=39)
+
+
+def validate_repo_name(name: str) -> str:
+    """
+    Validate repository name format (single repo name, no org prefix).
+    
+    GitHub repo names: alphanumeric, hyphens, underscores, dots, max 100 chars
+    
+    Args:
+        name: Repository name to validate
+        
+    Returns:
+        Sanitized repository name
+        
+    Raises:
+        ValueError: If repository name is invalid
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError("Repository name must be a non-empty string")
+    # GitHub repo names: alphanumeric, hyphens, underscores, dots, max 100 chars
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$', name):
+        raise ValueError(f"Invalid repository name format: {name}")
+    if len(name) > 100:
+        raise ValueError(f"Repository name too long: {name}")
+    return sanitize_string_input(name, max_length=100)
+
+
+def validate_repo_full_name(full_name: str) -> str:
+    """
+    Validate full repository name format (org/repo).
+    
+    Args:
+        full_name: Full repository name in format 'org/repo'
+        
+    Returns:
+        Sanitized full repository name
+        
+    Raises:
+        ValueError: If full repository name is invalid
+    """
+    if not full_name or not isinstance(full_name, str):
+        raise ValueError("Repository full name must be a non-empty string")
+    # Full name format: org/repo
+    if '/' not in full_name:
+        raise ValueError(f"Full repository name must be in format 'org/repo': {full_name}")
+    parts = full_name.split('/', 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid full repository name format: {full_name}")
+    org_part, repo_part = parts
+    # Validate org part
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$', org_part):
+        raise ValueError(f"Invalid organization name in full name: {full_name}")
+    # Validate repo part
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$', repo_part):
+        raise ValueError(f"Invalid repository name in full name: {full_name}")
+    if len(full_name) > 200:  # org (39) + / + repo (100) + buffer
+        raise ValueError(f"Full repository name too long: {full_name}")
+    return sanitize_string_input(full_name, max_length=200)
+
+
+def sanitize_error_message(msg, tokens_to_sanitize: list) -> str:
+    """
+    Remove all tokens from error messages to prevent token exposure.
+    
+    Args:
+        msg: Error message to sanitize
+        tokens_to_sanitize: List of tokens to remove from the message
+        
+    Returns:
+        Sanitized error message
+    """
+    if not msg or not isinstance(msg, str):
+        return str(msg) if msg else ""
+    sanitized = msg
+    for token in tokens_to_sanitize:
+        if token:
+            sanitized = sanitized.replace(token, "***")
+    return sanitized
+

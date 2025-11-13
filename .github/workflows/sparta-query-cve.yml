@@ -1,4 +1,4 @@
-name: Query CVE
+name: Sparta - Query CVE
 
 on:
   push:
@@ -46,7 +46,7 @@ on:
 
 jobs:
   query:
-    name: Query CVE
+    name: Sparta - Query CVE
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,7 +62,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Query CVE
+      - name: Setup security utilities
+        run: |
+          mkdir -p /tmp/sparta_utils
+          cp scripts/security_utils.py /tmp/sparta_utils/
+
+      - name: Sparta - Query CVE
         id: query
         env:
           CVE_ID: ${{ inputs.cve-id || github.event.inputs.cve-id || '' }}
@@ -73,31 +78,11 @@ jobs:
           import os
           import json
           import sys
-          import re
           from pathlib import Path
-
-          # CVE validation function
-          def validate_cve_id(cve_id: str) -> bool:
-              if not cve_id or not isinstance(cve_id, str):
-                  return False
-              pattern = r'^CVE-\d{4}-\d{4,}$'
-              return bool(re.match(pattern, cve_id.upper()))
           
-          # Path sanitization function
-          def sanitize_path(user_path: str, base_dir: Path) -> Path:
-              if not user_path or not isinstance(user_path, str):
-                  raise ValueError("Path must be a non-empty string")
-              base_dir = Path(base_dir).resolve()
-              user_path = Path(user_path)
-              if user_path.is_absolute():
-                  resolved = user_path.resolve()
-              else:
-                  resolved = (base_dir / user_path).resolve()
-              try:
-                  resolved.relative_to(base_dir)
-              except ValueError:
-                  raise ValueError(f"Path traversal detected: {user_path} resolves outside base directory")
-              return resolved
+          # Import security utilities
+          sys.path.insert(0, '/tmp/sparta_utils')
+          from security_utils import validate_cve_id, sanitize_path
 
           cve_id = os.environ.get('CVE_ID', '').upper()
           if not cve_id:

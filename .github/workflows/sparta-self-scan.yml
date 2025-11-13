@@ -1,4 +1,4 @@
-name: Self-Scan Sparta Repository
+name: Sparta - Self-Scan Repository
 
 on:
   push:
@@ -15,7 +15,7 @@ on:
 jobs:
   scan-sparta:
     name: Scan Sparta for Vulnerabilities
-    uses: ./.github/workflows/package-vulnerability-scan.yml
+    uses: ./.github/workflows/sparta-package-vulnerability-scan.yml
     with:
       scan-ref: '.'
       severity: 'CRITICAL,HIGH'
