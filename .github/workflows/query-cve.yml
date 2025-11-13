@@ -1,6 +1,22 @@
 name: Query CVE
 
 on:
+  workflow_dispatch:
+    inputs:
+      cve-id:
+        description: 'CVE identifier to search for (e.g., CVE-2024-1234)'
+        required: true
+        type: string
+      reports-dir:
+        description: 'Directory containing vulnerability reports'
+        required: false
+        type: string
+        default: 'vulnerability-reports'
+      output-format:
+        description: 'Output format (table or json)'
+        required: false
+        type: string
+        default: 'table'
   workflow_call:
     inputs:
       cve-id:
@@ -46,9 +62,9 @@ jobs:
       - name: Query CVE
         id: query
         env:
-          CVE_ID: ${{ inputs.cve-id }}
-          REPORTS_DIR: ${{ inputs.reports-dir }}
-          OUTPUT_FORMAT: ${{ inputs.output-format }}
+          CVE_ID: ${{ inputs.cve-id || github.event.inputs.cve-id || '' }}
+          REPORTS_DIR: ${{ inputs.reports-dir || github.event.inputs.reports-dir || 'vulnerability-reports' }}
+          OUTPUT_FORMAT: ${{ inputs.output-format || github.event.inputs.output-format || 'table' }}
         run: |
           python3 << 'EOF'
           import os
@@ -56,7 +72,10 @@ jobs:
           import sys
           from pathlib import Path
 
-          cve_id = os.environ['CVE_ID'].upper()
+          cve_id = os.environ.get('CVE_ID', '').upper()
+          if not cve_id:
+              print("Error: CVE ID is required")
+              sys.exit(1)
           reports_dir = Path(os.environ['REPORTS_DIR'])
           output_format = os.environ.get('OUTPUT_FORMAT', 'table')
 

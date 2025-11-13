@@ -1,6 +1,18 @@
 name: Aggregate Scan Results
 
 on:
+  workflow_dispatch:
+    inputs:
+      reports-dir:
+        description: 'Directory containing vulnerability reports'
+        required: false
+        type: string
+        default: 'vulnerability-reports'
+      output-dir:
+        description: 'Output directory for aggregated data'
+        required: false
+        type: string
+        default: 'aggregated'
   workflow_call:
     inputs:
       reports-dir:
@@ -31,8 +43,8 @@ jobs:
 
       - name: Aggregate scan results
         env:
-          REPORTS_DIR: ${{ inputs.reports-dir }}
-          OUTPUT_DIR: ${{ inputs.output-dir }}
+          REPORTS_DIR: ${{ inputs.reports-dir || github.event.inputs.reports-dir || 'vulnerability-reports' }}
+          OUTPUT_DIR: ${{ inputs.output-dir || github.event.inputs.output-dir || 'aggregated' }}
         run: |
           python3 << 'EOF'
           import os
