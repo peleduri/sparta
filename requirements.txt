@@ -3,8 +3,10 @@
 # Use 'pip install --upgrade' to check for newer versions
 
 # HTTP library - latest stable version as of 2025
-requests==2.31.0
+# https://github.com/psf/requests/releases/tag/v2.32.5
+requests==2.32.5
 
 # GitHub API library - latest stable version as of 2025
-PyGithub==2.1.1
+# https://github.com/PyGithub/PyGithub/releases/tag/v2.8.1
+PyGithub==2.8.1
 
