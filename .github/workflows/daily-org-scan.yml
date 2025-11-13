@@ -14,7 +14,7 @@ jobs:
     name: Scan All Organization Repositories
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: read
     steps:
       - name: Checkout code
@@ -32,19 +32,48 @@ jobs:
       - name: Get all organization repositories
         id: get-repos
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_ID: ${{ secrets.SPARTA_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
           GITHUB_ORG: ${{ github.repository_owner }}
         run: |
           python3 << 'EOF'
           import os
           import json
           from github import Github
+          from github.Auth import AppAuth, Token
 
-          token = os.environ['GITHUB_TOKEN']
+          app_id = int(os.environ['APP_ID'])
+          private_key = os.environ['APP_PRIVATE_KEY']
           org_name = os.environ['GITHUB_ORG']
           
-          g = Github(token)
+          # Handle private key - it might be base64 encoded or have escaped newlines
+          # If it contains \n, replace them with actual newlines
+          if '\\n' in private_key:
+              private_key = private_key.replace('\\n', '\n')
+          
+          # Authenticate as GitHub App
+          app_auth = AppAuth(app_id=app_id, private_key=private_key)
+          app = Github(auth=app_auth)
+          
+          # Get installation for the organization
+          try:
+              installation = app.get_installation(org_name)
+          except Exception as e:
+              print(f"Error getting installation for {org_name}: {e}")
+              print("Make sure the GitHub App is installed in the organization")
+              raise
+          
+          # Create installation token
+          installation_token = installation.create_access_token()
+          
+          # Use installation token to access organization (using new Auth API)
+          token_auth = Token(installation_token.token)
+          g = Github(auth=token_auth)
           org = g.get_organization(org_name)
+          
+          # Save installation token for later use
+          with open('installation_token.txt', 'w') as f:
+              f.write(installation_token.token)
           
           repos = []
           for repo in org.get_repos():
@@ -74,8 +103,8 @@ jobs:
 
       - name: Scan each repository
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ORG: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           SCAN_DATE: ${{ github.run_id }}
         run: |
           python3 << 'EOF'
@@ -86,9 +115,13 @@ jobs:
           from pathlib import Path
           from datetime import datetime
 
-          token = os.environ['GITHUB_TOKEN']
           org_name = os.environ['GITHUB_ORG']
+          current_repo = os.environ.get('GITHUB_REPOSITORY', '')
           scan_date = datetime.now().strftime('%Y%m%d')
+          
+          # Read installation token
+          with open('installation_token.txt', 'r') as f:
+              installation_token = f.read().strip()
           
           # Read repos list
           with open('repos.json', 'r') as f:
@@ -102,6 +135,45 @@ jobs:
               repo_full_name = repo['full_name']
               default_branch = repo['default_branch']
               
+              # Skip cloning Sparta repo since we're already in it
+              if repo_full_name == current_repo:
+                  print(f"\n{'='*60}")
+                  print(f"Skipping clone for {repo_full_name} (already in this repository)")
+                  print(f"Scanning current repository...")
+                  print(f"{'='*60}")
+                  
+                  # Use current directory for scan
+                  repo_dir = Path('.')
+                  report_dir = reports_dir / repo_name / scan_date
+                  report_dir.mkdir(parents=True, exist_ok=True)
+                  
+                  # Run Trivy scan on current directory
+                  result = subprocess.run(
+                      [
+                          'trivy', 'fs',
+                          '--format', 'json',
+                          '--output', str(report_dir / 'trivy-report.json'),
+                          '--timeout', '120m0s',
+                          '--ignore-unfixed',
+                          '--scanners', 'vuln',
+                          '--vuln-type', 'os,library',
+                          '--severity', 'CRITICAL,HIGH,MEDIUM,LOW',
+                          '--cache-dir', f'{os.environ.get("GITHUB_WORKSPACE", ".")}/.cache/trivy',
+                          '.'
+                      ],
+                      capture_output=True,
+                      text=True,
+                      timeout=900
+                  )
+                  
+                  if result.returncode == 0:
+                      print(f"✓ Scan completed for {repo_full_name}")
+                  else:
+                      print(f"⚠ Scan completed with warnings for {repo_full_name}")
+                      if result.stderr:
+                          print(result.stderr)
+                  continue
+              
               print(f"\n{'='*60}")
               print(f"Scanning: {repo_full_name}")
               print(f"{'='*60}")
@@ -111,68 +183,22 @@ jobs:
               report_dir.mkdir(parents=True, exist_ok=True)
               
               try:
-                  # Clone repository securely without exposing token in URL
-                  # Use git credential helper to avoid token in URL
-                  clone_url = f"https://github.com/{repo_full_name}.git"
+                  # Clone repository using installation token
+                  clone_url = f"https://x-access-token:{installation_token}@github.com/{repo_full_name}.git"
                   
-                  # Configure git to use token from environment
-                  env = os.environ.copy()
-                  env['GIT_TERMINAL_PROMPT'] = '0'
-                  
-                  # Set up credential helper to use token from environment
-                  credential_url = f"https://{token}@github.com"
-                  subprocess.run(
-                      ['git', 'config', '--global', 'credential.helper', 'store'],
-                      check=True,
-                      capture_output=True,
-                      timeout=10
-                  )
-                  
-                  # Write credential to temporary location (git credential store format)
-                  import tempfile
-                  cred_file = os.path.join(tempfile.gettempdir(), f'git-cred-{repo_name}')
-                  with open(cred_file, 'w') as f:
-                      f.write(credential_url + '\n')
-                  
-                  # Configure git to use the credential file
-                  subprocess.run(
-                      ['git', 'config', '--global', f'credential.helper', f'store --file={cred_file}'],
-                      check=True,
-                      capture_output=True,
-                      timeout=10
-                  )
-                  
-                  # Clone repository
+                  # Clone repository (token in URL is safe because we use capture_output=True)
                   clone_result = subprocess.run(
                       ['git', 'clone', '--depth', '1', '--branch', default_branch, clone_url, str(repo_dir)],
                       check=False,
                       capture_output=True,
                       text=True,
-                      timeout=300,
-                      env=env
+                      timeout=300
                   )
-                  
-                  # Clean up credential file
-                  try:
-                      if os.path.exists(cred_file):
-                          os.unlink(cred_file)
-                  except Exception:
-                      pass
-                  
-                  # Reset credential helper
-                  try:
-                      subprocess.run(
-                          ['git', 'config', '--global', '--unset', 'credential.helper'],
-                          capture_output=True,
-                          timeout=10
-                      )
-                  except Exception:
-                      pass
                   
                   if clone_result.returncode != 0:
                       error_msg = clone_result.stderr[:200] if clone_result.stderr else 'Unknown error'
                       # Sanitize error message to remove any potential token exposure
-                      error_msg = error_msg.replace(token, "***") if token in error_msg else error_msg
+                      error_msg = error_msg.replace(installation_token, "***") if installation_token in error_msg else error_msg
                       raise Exception(f"Git clone failed: {error_msg}")
                   
                   # Run Trivy scan
@@ -233,10 +259,19 @@ jobs:
           EOF
 
       - name: Commit scan results
+        env:
+          INSTALLATION_TOKEN: ${{ steps.get-repos.outputs.installation_token }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add vulnerability-reports/
-          git diff --staged --quiet || git commit -m "Daily vulnerability scan results - $(date +'%Y-%m-%d')"
-          git push || echo "No changes to commit or push failed"
+          if ! git diff --staged --quiet; then
+            git commit -m "Daily vulnerability scan results - $(date +'%Y-%m-%d')"
+            # Use installation token for push
+            INSTALLATION_TOKEN=$(cat installation_token.txt)
+            git remote set-url origin https://x-access-token:${INSTALLATION_TOKEN}@github.com/${{ github.repository }}.git
+            git push origin main || echo "Push failed"
+          else
+            echo "No changes to commit"
+          fi
 
