@@ -1,10 +1,10 @@
 # Pinned dependencies for security and reproducibility
-# Last updated: 2024-11-13
+# Last updated: 2025-11-14
 # Use 'pip install --upgrade' to check for newer versions
 
-# HTTP library - latest stable version as of 2024
+# HTTP library - latest stable version as of 2025
 requests==2.31.0
 
-# GitHub API library - latest stable version as of 2024
+# GitHub API library - latest stable version as of 2025
 PyGithub==2.1.1
 
