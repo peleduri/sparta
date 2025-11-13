@@ -1,0 +1,184 @@
+name: Daily Organization Vulnerability Scan
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  scan-org-repos:
+    name: Scan All Organization Repositories
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pygithub
+
+      - name: Get all organization repositories
+        id: get-repos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ORG: ${{ github.repository_owner }}
+        run: |
+          python3 << 'EOF'
+          import os
+          import json
+          from github import Github
+
+          token = os.environ['GITHUB_TOKEN']
+          org_name = os.environ['GITHUB_ORG']
+          
+          g = Github(token)
+          org = g.get_organization(org_name)
+          
+          repos = []
+          for repo in org.get_repos():
+              repos.append({
+                  'name': repo.name,
+                  'full_name': repo.full_name,
+                  'private': repo.private,
+                  'default_branch': repo.default_branch
+              })
+          
+          print(f"Found {len(repos)} repositories")
+          
+          # Save repos list to file
+          with open('repos.json', 'w') as f:
+              json.dump(repos, f, indent=2)
+          
+          # Set output (using new format)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"count={len(repos)}\n")
+          EOF
+
+      - name: Setup Trivy
+        uses: aquasecurity/setup-trivy@v0.2.0
+        with:
+          version: 'v0.65.0'
+          cache: true
+
+      - name: Scan each repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ORG: ${{ github.repository_owner }}
+          SCAN_DATE: ${{ github.run_id }}
+        run: |
+          python3 << 'EOF'
+          import os
+          import json
+          import subprocess
+          import shutil
+          from pathlib import Path
+          from datetime import datetime
+
+          token = os.environ['GITHUB_TOKEN']
+          org_name = os.environ['GITHUB_ORG']
+          scan_date = datetime.now().strftime('%Y%m%d')
+          
+          # Read repos list
+          with open('repos.json', 'r') as f:
+              repos = json.load(f)
+          
+          reports_dir = Path('vulnerability-reports') / org_name
+          reports_dir.mkdir(parents=True, exist_ok=True)
+          
+          for repo in repos:
+              repo_name = repo['name']
+              repo_full_name = repo['full_name']
+              default_branch = repo['default_branch']
+              
+              print(f"\n{'='*60}")
+              print(f"Scanning: {repo_full_name}")
+              print(f"{'='*60}")
+              
+              repo_dir = Path(f'tmp-{repo_name}')
+              report_dir = reports_dir / repo_name / scan_date
+              report_dir.mkdir(parents=True, exist_ok=True)
+              
+              try:
+                  # Clone repository
+                  clone_url = f"https://{token}@github.com/{repo_full_name}.git"
+                  subprocess.run(
+                      ['git', 'clone', '--depth', '1', '--branch', default_branch, clone_url, str(repo_dir)],
+                      check=True,
+                      capture_output=True,
+                      timeout=300
+                  )
+                  
+                  # Run Trivy scan
+                  result = subprocess.run(
+                      [
+                          'trivy', 'fs',
+                          '--format', 'json',
+                          '--output', str(report_dir / 'trivy-report.json'),
+                          '--timeout', '120m0s',
+                          '--ignore-unfixed',
+                          '--scanners', 'vuln',
+                          '--vuln-type', 'os,library',
+                          '--severity', 'CRITICAL,HIGH,MEDIUM,LOW',
+                          '--cache-dir', f'{os.environ.get("GITHUB_WORKSPACE", ".")}/.cache/trivy',
+                          str(repo_dir)
+                      ],
+                      capture_output=True,
+                      text=True,
+                      timeout=900
+                  )
+                  
+                  if result.returncode == 0:
+                      print(f"✓ Scan completed for {repo_full_name}")
+                  else:
+                      print(f"⚠ Scan completed with warnings for {repo_full_name}")
+                      print(result.stderr)
+                  
+              except subprocess.TimeoutExpired:
+                  print(f"✗ Timeout scanning {repo_full_name}")
+                  # Create empty report with error
+                  error_report = {
+                      'error': 'Scan timeout',
+                      'repository': repo_full_name,
+                      'timestamp': datetime.now().isoformat()
+                  }
+                  with open(report_dir / 'trivy-report.json', 'w') as f:
+                      json.dump(error_report, f, indent=2)
+              
+              except Exception as e:
+                  print(f"✗ Error scanning {repo_full_name}: {str(e)}")
+                  # Create empty report with error
+                  error_report = {
+                      'error': str(e),
+                      'repository': repo_full_name,
+                      'timestamp': datetime.now().isoformat()
+                  }
+                  with open(report_dir / 'trivy-report.json', 'w') as f:
+                      json.dump(error_report, f, indent=2)
+              
+              finally:
+                  # Cleanup
+                  if repo_dir.exists():
+                      shutil.rmtree(repo_dir, ignore_errors=True)
+          
+          print(f"\n{'='*60}")
+          print(f"Scanning complete. Reports saved to vulnerability-reports/{org_name}/")
+          print(f"{'='*60}")
+          EOF
+
+      - name: Commit scan results
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add vulnerability-reports/
+          git diff --staged --quiet || git commit -m "Daily vulnerability scan results - $(date +'%Y-%m-%d')"
+          git push || echo "No changes to commit or push failed"
+

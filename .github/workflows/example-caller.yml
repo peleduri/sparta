@@ -1,0 +1,19 @@
+name: Example - Call Package Vulnerability Scan
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  vulnerability-scan:
+    name: Run Vulnerability Scan
+    uses: ./.github/workflows/package-vulnerability-scan.yml
+    # Optional: Override default inputs
+    # with:
+    #   scan-ref: '.'
+    #   severity: 'CRITICAL,HIGH'
+    #   exit-code: '1'
+
