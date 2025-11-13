@@ -27,7 +27,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pygithub
+          pip install requests pygithub pyjwt
+          # Copy security_utils.py to a location accessible to inline scripts
+          mkdir -p /tmp/sparta_utils
+          cp scripts/security_utils.py /tmp/sparta_utils/
 
       - name: Get all organization repositories
         id: get-repos
@@ -39,60 +42,174 @@ jobs:
           python3 << 'EOF'
           import os
           import json
+          import time
+          import tempfile
+          import jwt
+          import requests
+          import re
+          import sys
+          from pathlib import Path
           from github import Github
-          from github.Auth import AppAuth, Token
+          from github.Auth import Token
+          
+          # Import security utilities
+          sys.path.insert(0, '/tmp/sparta_utils')
+          from security_utils import sanitize_string_input, sanitize_path
 
-          app_id = int(os.environ['APP_ID'])
-          private_key = os.environ['APP_PRIVATE_KEY']
-          org_name = os.environ['GITHUB_ORG']
-          
-          # Handle private key - it might be base64 encoded or have escaped newlines
-          # If it contains \n, replace them with actual newlines
-          if '\\n' in private_key:
-              private_key = private_key.replace('\\n', '\n')
-          
-          # Authenticate as GitHub App
-          app_auth = AppAuth(app_id=app_id, private_key=private_key)
-          app = Github(auth=app_auth)
-          
-          # Get installation for the organization
+          def sanitize_error_message(msg, tokens_to_sanitize):
+              """Remove all tokens from error messages."""
+              if not msg or not isinstance(msg, str):
+                  return str(msg) if msg else ""
+              sanitized = msg
+              for token in tokens_to_sanitize:
+                  if token:
+                      sanitized = sanitized.replace(token, "***")
+              return sanitized
+
+          def validate_org_name(name):
+              """Validate organization name format."""
+              if not name or not isinstance(name, str):
+                  raise ValueError("Organization name must be a non-empty string")
+              # GitHub org names: alphanumeric, hyphens, underscores, max 39 chars
+              if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-_]*[a-zA-Z0-9])?$', name):
+                  raise ValueError(f"Invalid organization name format: {name}")
+              if len(name) > 39:
+                  raise ValueError(f"Organization name too long: {name}")
+              return sanitize_string_input(name, max_length=39)
+
+          def validate_repo_name(name):
+              """Validate repository name format."""
+              if not name or not isinstance(name, str):
+                  raise ValueError("Repository name must be a non-empty string")
+              # GitHub repo names: alphanumeric, hyphens, underscores, dots, max 100 chars
+              if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$', name):
+                  raise ValueError(f"Invalid repository name format: {name}")
+              if len(name) > 100:
+                  raise ValueError(f"Repository name too long: {name}")
+              return sanitize_string_input(name, max_length=100)
+
+          # Validate and sanitize inputs
+          private_key = None
           try:
-              installation = app.get_installation(org_name)
+              app_id = int(os.environ['APP_ID'])
+              private_key = os.environ['APP_PRIVATE_KEY']
+              org_name = validate_org_name(os.environ['GITHUB_ORG'])
+          except (KeyError, ValueError) as e:
+              # Sanitize error - private_key might not be set yet
+              tokens_to_sanitize = [private_key] if private_key else []
+              print(f"Error: Invalid input - {sanitize_error_message(str(e), tokens_to_sanitize)}")
+              sys.exit(1)
+          
+          # Tokens to sanitize in error messages
+          tokens_to_sanitize = [private_key]
+          
+          try:
+              # Handle private key - it might be base64 encoded or have escaped newlines
+              # If it contains \n, replace them with actual newlines
+              if '\\n' in private_key:
+                  private_key = private_key.replace('\\n', '\n')
+              
+              # Generate JWT token for GitHub App authentication
+              now = int(time.time())
+              payload = {
+                  'iat': now - 60,  # Issued at time (60 seconds ago to account for clock skew)
+                  'exp': now + 600,  # Expires in 10 minutes
+                  'iss': app_id  # Issuer (App ID)
+              }
+              jwt_token = jwt.encode(payload, private_key, algorithm='RS256')
+              tokens_to_sanitize.append(jwt_token)
+              
+              # Get installation ID for the organization
+              headers = {
+                  'Authorization': f'Bearer {jwt_token}',
+                  'Accept': 'application/vnd.github.v3+json'
+              }
+              
+              # First, get all installations
+              response = requests.get('https://api.github.com/app/installations', headers=headers)
+              response.raise_for_status()
+              installations = response.json()
+              
+              # Find installation for the organization
+              installation_id = None
+              for inst in installations:
+                  account_login = inst.get('account', {}).get('login', '')
+                  if account_login == org_name:
+                      installation_id = inst.get('id')
+                      break
+              
+              # Validate installation_id
+              if installation_id is None:
+                  raise Exception(f"No installation found for organization {org_name}. Make sure the GitHub App is installed in the organization.")
+              
+              if not isinstance(installation_id, int) or installation_id <= 0:
+                  raise ValueError(f"Invalid installation ID: {installation_id}")
+              
+              # Create installation access token
+              response = requests.post(
+                  f'https://api.github.com/app/installations/{installation_id}/access_tokens',
+                  headers=headers
+              )
+              response.raise_for_status()
+              installation_token = response.json()['token']
+              tokens_to_sanitize.append(installation_token)
+              
+              # Use installation token to access organization via PyGithub
+              token_auth = Token(installation_token)
+              g = Github(auth=token_auth)
+              org = g.get_organization(org_name)
+              
+              # Save installation token securely in temporary file with restricted permissions
+              token_fd, token_file = tempfile.mkstemp(prefix='sparta_token_', suffix='.txt', text=True)
+              try:
+                  os.fchmod(token_fd, 0o600)  # Read/write for owner only
+                  with os.fdopen(token_fd, 'w') as f:
+                      f.write(installation_token)
+                  # Save path to environment variable for next step
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write(f"token_file={token_file}\n")
+              except Exception as e:
+                  os.close(token_fd)
+                  if os.path.exists(token_file):
+                      os.unlink(token_file)
+                  raise
+              
+              repos = []
+              for repo in org.get_repos():
+                  try:
+                      repo_name = validate_repo_name(repo.name)
+                      repo_full_name = validate_repo_name(repo.full_name)
+                      repos.append({
+                          'name': repo_name,
+                          'full_name': repo_full_name,
+                          'private': repo.private,
+                          'default_branch': repo.default_branch or 'main'
+                      })
+                  except ValueError as e:
+                      print(f"Warning: Skipping invalid repository {repo.name}: {sanitize_error_message(str(e), tokens_to_sanitize)}")
+                      continue
+              
+              print(f"Found {len(repos)} repositories")
+              
+              # Save repos list to file (validate path)
+              base_dir = Path.cwd()
+              repos_file = sanitize_path('repos.json', base_dir)
+              with open(repos_file, 'w') as f:
+                  json.dump(repos, f, indent=2)
+              
+              # Set output (using new format)
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f"count={len(repos)}\n")
           except Exception as e:
-              print(f"Error getting installation for {org_name}: {e}")
-              print("Make sure the GitHub App is installed in the organization")
-              raise
-          
-          # Create installation token
-          installation_token = installation.create_access_token()
-          
-          # Use installation token to access organization (using new Auth API)
-          token_auth = Token(installation_token.token)
-          g = Github(auth=token_auth)
-          org = g.get_organization(org_name)
-          
-          # Save installation token for later use
-          with open('installation_token.txt', 'w') as f:
-              f.write(installation_token.token)
-          
-          repos = []
-          for repo in org.get_repos():
-              repos.append({
-                  'name': repo.name,
-                  'full_name': repo.full_name,
-                  'private': repo.private,
-                  'default_branch': repo.default_branch
-              })
-          
-          print(f"Found {len(repos)} repositories")
-          
-          # Save repos list to file
-          with open('repos.json', 'w') as f:
-              json.dump(repos, f, indent=2)
-          
-          # Set output (using new format)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"count={len(repos)}\n")
+              error_msg = sanitize_error_message(str(e), tokens_to_sanitize)
+              print(f"Error: {error_msg}")
+              # Cleanup token file on error
+              if 'token_file' in locals() and os.path.exists(token_file):
+                  try:
+                      os.unlink(token_file)
+                  except Exception:
+                      pass
+              sys.exit(1)
           EOF
 
       - name: Setup Trivy
@@ -106,34 +223,103 @@ jobs:
           GITHUB_ORG: ${{ github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           SCAN_DATE: ${{ github.run_id }}
+          TOKEN_FILE: ${{ steps.get-repos.outputs.token_file }}
         run: |
           python3 << 'EOF'
           import os
           import json
           import subprocess
           import shutil
+          import sys
+          import tempfile
           from pathlib import Path
           from datetime import datetime
+          
+          # Import security utilities
+          sys.path.insert(0, '/tmp/sparta_utils')
+          from security_utils import sanitize_path, secure_git_clone, sanitize_string_input
 
-          org_name = os.environ['GITHUB_ORG']
-          current_repo = os.environ.get('GITHUB_REPOSITORY', '')
-          scan_date = datetime.now().strftime('%Y%m%d')
+          def sanitize_error_message(msg, tokens_to_sanitize):
+              """Remove all tokens from error messages."""
+              if not msg or not isinstance(msg, str):
+                  return str(msg) if msg else ""
+              sanitized = msg
+              for token in tokens_to_sanitize:
+                  if token:
+                      sanitized = sanitized.replace(token, "***")
+              return sanitized
+
+          def validate_org_name(name):
+              """Validate organization name format."""
+              if not name or not isinstance(name, str):
+                  raise ValueError("Organization name must be a non-empty string")
+              return sanitize_string_input(name, max_length=39)
+
+          def validate_repo_name(name):
+              """Validate repository name format."""
+              if not name or not isinstance(name, str):
+                  raise ValueError("Repository name must be a non-empty string")
+              return sanitize_string_input(name, max_length=100)
+
+          # Validate inputs
+          try:
+              org_name = validate_org_name(os.environ['GITHUB_ORG'])
+              current_repo = os.environ.get('GITHUB_REPOSITORY', '')
+              scan_date = datetime.now().strftime('%Y%m%d')
+          except (KeyError, ValueError) as e:
+              print(f"Error: Invalid input - {str(e)}")
+              sys.exit(1)
           
-          # Read installation token
-          with open('installation_token.txt', 'r') as f:
-              installation_token = f.read().strip()
+          # Read installation token from secure temp file
+          token_file = os.environ.get('TOKEN_FILE', '')
+          if not token_file or not os.path.exists(token_file):
+              print("Error: Token file not found")
+              sys.exit(1)
           
-          # Read repos list
-          with open('repos.json', 'r') as f:
-              repos = json.load(f)
+          try:
+              with open(token_file, 'r') as f:
+                  installation_token = f.read().strip()
+          except Exception as e:
+              # Sanitize error message (token_file path might contain sensitive info)
+              error_msg = sanitize_error_message(str(e), [])
+              # Also sanitize token_file path if it contains tokens
+              safe_path = token_file.replace('token', '***') if 'token' in token_file.lower() else token_file
+              print(f"Error: Failed to read token file at {safe_path} - {error_msg}")
+              sys.exit(1)
           
-          reports_dir = Path('vulnerability-reports') / org_name
-          reports_dir.mkdir(parents=True, exist_ok=True)
+          tokens_to_sanitize = [installation_token]
+          
+          # Read repos list (validate path)
+          try:
+              base_dir = Path.cwd()
+              repos_file = sanitize_path('repos.json', base_dir)
+              with open(repos_file, 'r') as f:
+                  repos = json.load(f)
+          except Exception as e:
+              print(f"Error: Failed to read repos file - {sanitize_error_message(str(e), tokens_to_sanitize)}")
+              sys.exit(1)
+          
+          # Validate and sanitize reports directory path
+          try:
+              base_dir = Path.cwd()
+              reports_base = sanitize_path('vulnerability-reports', base_dir)
+              reports_dir = sanitize_path(org_name, reports_base)
+              reports_dir.mkdir(parents=True, exist_ok=True)
+          except Exception as e:
+              print(f"Error: Invalid reports directory path - {sanitize_error_message(str(e), tokens_to_sanitize)}")
+              sys.exit(1)
           
           for repo in repos:
-              repo_name = repo['name']
-              repo_full_name = repo['full_name']
-              default_branch = repo['default_branch']
+              try:
+                  # Validate repository data
+                  repo_name = validate_repo_name(repo['name'])
+                  repo_full_name = validate_repo_name(repo['full_name'])
+                  default_branch = repo.get('default_branch', 'main')
+                  if not default_branch:
+                      default_branch = 'main'
+              except (KeyError, ValueError) as e:
+                  print(f"Warning: Skipping invalid repository data: {sanitize_error_message(str(e), tokens_to_sanitize)}")
+                  continue
               
               # Skip cloning Sparta repo since we're already in it
               if repo_full_name == current_repo:
@@ -144,8 +330,12 @@ jobs:
                   
                   # Use current directory for scan
                   repo_dir = Path('.')
-                  report_dir = reports_dir / repo_name / scan_date
-                  report_dir.mkdir(parents=True, exist_ok=True)
+                  try:
+                      report_dir = sanitize_path(repo_name, reports_dir) / scan_date
+                      report_dir.mkdir(parents=True, exist_ok=True)
+                  except Exception as e:
+                      print(f"Error: Invalid report directory path - {sanitize_error_message(str(e), tokens_to_sanitize)}")
+                      continue
                   
                   # Run Trivy scan on current directory
                   result = subprocess.run(
@@ -178,28 +368,35 @@ jobs:
               print(f"Scanning: {repo_full_name}")
               print(f"{'='*60}")
               
-              repo_dir = Path(f'tmp-{repo_name}')
-              report_dir = reports_dir / repo_name / scan_date
-              report_dir.mkdir(parents=True, exist_ok=True)
+              # Validate and create repo directory path
+              try:
+                  base_dir = Path.cwd()
+                  repo_dir_name = f'tmp-{repo_name}'
+                  # Sanitize repo_dir_name to prevent path traversal
+                  repo_dir_name = repo_dir_name.replace('..', '').replace('/', '').replace('\\', '')
+                  repo_dir = sanitize_path(repo_dir_name, base_dir)
+                  
+                  # Validate and create report directory
+                  report_dir = sanitize_path(repo_name, reports_dir) / scan_date
+                  report_dir.mkdir(parents=True, exist_ok=True)
+              except Exception as e:
+                  print(f"Error: Invalid directory path - {sanitize_error_message(str(e), tokens_to_sanitize)}")
+                  continue
               
               try:
-                  # Clone repository using installation token
-                  clone_url = f"https://x-access-token:{installation_token}@github.com/{repo_full_name}.git"
+                  # Clone repository securely using secure_git_clone function
+                  clone_url = f"https://github.com/{repo_full_name}.git"
                   
-                  # Clone repository (token in URL is safe because we use capture_output=True)
-                  clone_result = subprocess.run(
-                      ['git', 'clone', '--depth', '1', '--branch', default_branch, clone_url, str(repo_dir)],
-                      check=False,
-                      capture_output=True,
-                      text=True,
+                  success, error_msg = secure_git_clone(
+                      repo_url=clone_url,
+                      target_dir=repo_dir,
+                      branch=default_branch,
+                      token=installation_token,
                       timeout=300
                   )
                   
-                  if clone_result.returncode != 0:
-                      error_msg = clone_result.stderr[:200] if clone_result.stderr else 'Unknown error'
-                      # Sanitize error message to remove any potential token exposure
-                      error_msg = error_msg.replace(installation_token, "***") if installation_token in error_msg else error_msg
-                      raise Exception(f"Git clone failed: {error_msg}")
+                  if not success:
+                      raise Exception(f"Git clone failed: {sanitize_error_message(error_msg, tokens_to_sanitize)}")
                   
                   # Run Trivy scan
                   result = subprocess.run(
@@ -227,26 +424,34 @@ jobs:
                       print(result.stderr)
                   
               except subprocess.TimeoutExpired:
+                  error_msg = sanitize_error_message('Scan timeout', tokens_to_sanitize)
                   print(f"✗ Timeout scanning {repo_full_name}")
                   # Create empty report with error
                   error_report = {
-                      'error': 'Scan timeout',
+                      'error': error_msg,
                       'repository': repo_full_name,
                       'timestamp': datetime.now().isoformat()
                   }
-                  with open(report_dir / 'trivy-report.json', 'w') as f:
-                      json.dump(error_report, f, indent=2)
+                  try:
+                      with open(report_dir / 'trivy-report.json', 'w') as f:
+                          json.dump(error_report, f, indent=2)
+                  except Exception:
+                      pass
               
               except Exception as e:
-                  print(f"✗ Error scanning {repo_full_name}: {str(e)}")
-                  # Create empty report with error
+                  error_msg = sanitize_error_message(str(e), tokens_to_sanitize)
+                  print(f"✗ Error scanning {repo_full_name}: {error_msg}")
+                  # Create empty report with error (sanitized)
                   error_report = {
-                      'error': str(e),
+                      'error': error_msg,
                       'repository': repo_full_name,
                       'timestamp': datetime.now().isoformat()
                   }
-                  with open(report_dir / 'trivy-report.json', 'w') as f:
-                      json.dump(error_report, f, indent=2)
+                  try:
+                      with open(report_dir / 'trivy-report.json', 'w') as f:
+                          json.dump(error_report, f, indent=2)
+                  except Exception:
+                      pass
               
               finally:
                   # Cleanup
@@ -256,22 +461,124 @@ jobs:
           print(f"\n{'='*60}")
           print(f"Scanning complete. Reports saved to vulnerability-reports/{org_name}/")
           print(f"{'='*60}")
+          
+          # Cleanup token file
+          if token_file and os.path.exists(token_file):
+              try:
+                  os.unlink(token_file)
+              except Exception:
+                  pass
           EOF
 
       - name: Commit scan results
         env:
-          INSTALLATION_TOKEN: ${{ steps.get-repos.outputs.installation_token }}
+          TOKEN_FILE: ${{ steps.get-repos.outputs.token_file }}
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add vulnerability-reports/
-          if ! git diff --staged --quiet; then
-            git commit -m "Daily vulnerability scan results - $(date +'%Y-%m-%d')"
-            # Use installation token for push
-            INSTALLATION_TOKEN=$(cat installation_token.txt)
-            git remote set-url origin https://x-access-token:${INSTALLATION_TOKEN}@github.com/${{ github.repository }}.git
-            git push origin main || echo "Push failed"
-          else
-            echo "No changes to commit"
+          python3 << 'EOF'
+          import os
+          import subprocess
+          import tempfile
+          import sys
+          
+          def secure_git_push(token_file, repo_url):
+              """Securely push to git repository using credential helper."""
+              if not token_file or not os.path.exists(token_file):
+                  print("Error: Token file not found")
+                  return False
+              
+              try:
+                  # Read token
+                  with open(token_file, 'r') as f:
+                      token = f.read().strip()
+                  
+                  # Create temporary credential file
+                  cred_fd, cred_file = tempfile.mkstemp(prefix='git_cred_', suffix='.txt', text=True)
+                  try:
+                      os.fchmod(cred_fd, 0o600)  # Read/write for owner only
+                      with os.fdopen(cred_fd, 'w') as f:
+                          f.write(f"https://{token}@github.com\n")
+                      
+                      # Configure git to use credential file
+                      subprocess.run(
+                          ['git', 'config', '--global', 'credential.helper', f'store --file={cred_file}'],
+                          check=True,
+                          capture_output=True,
+                          timeout=10
+                      )
+                      
+                      # Push
+                      result = subprocess.run(
+                          ['git', 'push', 'origin', 'main'],
+                          check=False,
+                          capture_output=True,
+                          text=True,
+                          timeout=300
+                      )
+                      
+                      # Cleanup credential file
+                      if os.path.exists(cred_file):
+                          os.unlink(cred_file)
+                      
+                      # Reset credential helper
+                      subprocess.run(
+                          ['git', 'config', '--global', '--unset', 'credential.helper'],
+                          capture_output=True,
+                          timeout=10
+                      )
+                      
+                      return result.returncode == 0
+                  except Exception:
+                      if os.path.exists(cred_file):
+                          os.unlink(cred_file)
+                      raise
+              except Exception as e:
+                  print(f"Error during git push: {str(e).replace(token, '***') if 'token' in locals() else str(e)}")
+                  return False
+          
+          # Configure git
+          subprocess.run(['git', 'config', '--local', 'user.email', 'action@github.com'], check=True)
+          subprocess.run(['git', 'config', '--local', 'user.name', 'GitHub Action'], check=True)
+          
+          # Stage changes
+          result = subprocess.run(['git', 'add', 'vulnerability-reports/'], check=False)
+          
+          # Check if there are changes
+          result = subprocess.run(['git', 'diff', '--staged', '--quiet'], check=False)
+          if result.returncode == 0:
+              print("No changes to commit")
+              sys.exit(0)
+          
+          # Commit
+          from datetime import datetime
+          commit_msg = f"Daily vulnerability scan results - {datetime.now().strftime('%Y-%m-%d')}"
+          subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
+          
+          # Push securely
+          token_file = os.environ.get('TOKEN_FILE', '')
+          repo_url = f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}.git"
+          
+          try:
+              if secure_git_push(token_file, repo_url):
+                  print("Successfully pushed to repository")
+              else:
+                  print("Push failed")
+                  sys.exit(1)
+          finally:
+              # Cleanup token file
+              if token_file and os.path.exists(token_file):
+                  try:
+                      os.unlink(token_file)
+                  except Exception:
+                      pass
+          EOF
+      
+      - name: Cleanup token file
+        if: always()
+        env:
+          TOKEN_FILE: ${{ steps.get-repos.outputs.token_file }}
+        run: |
+          if [ -n "$TOKEN_FILE" ] && [ -f "$TOKEN_FILE" ]; then
+            rm -f "$TOKEN_FILE"
+            echo "Token file cleaned up"
           fi
 
