@@ -151,6 +151,8 @@ def format_output(findings: List[Dict[str, Any]], output_format: str = 'table') 
 
 
 def main():
+    import os
+    
     parser = argparse.ArgumentParser(
         description='Query CVEs across all stored Trivy scan results',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -162,26 +164,38 @@ Examples:
         """
     )
     
+    # Support environment variables for Docker usage
+    default_cve_id = os.environ.get('CVE_ID', '')
+    default_reports_dir = os.environ.get('REPORTS_DIR', 'vulnerability-reports')
+    default_format = os.environ.get('OUTPUT_FORMAT', 'table')
+    
     parser.add_argument(
         'cve_id',
-        help='CVE identifier (e.g., CVE-2024-1234)'
+        nargs='?',
+        default=default_cve_id,
+        help='CVE identifier (e.g., CVE-2024-1234). Can also be set via CVE_ID env var.'
     )
     
     parser.add_argument(
         '--reports-dir',
         type=Path,
-        default=Path('vulnerability-reports'),
-        help='Directory containing vulnerability reports (default: vulnerability-reports)'
+        default=Path(default_reports_dir),
+        help='Directory containing vulnerability reports (default: vulnerability-reports or REPORTS_DIR env var)'
     )
     
     parser.add_argument(
         '--format',
         choices=['table', 'json'],
-        default='table',
-        help='Output format (default: table)'
+        default=default_format,
+        help='Output format (default: table or OUTPUT_FORMAT env var)'
     )
     
     args = parser.parse_args()
+    
+    # Validate CVE ID is provided
+    if not args.cve_id:
+        print("Error: CVE ID is required. Provide as argument or set CVE_ID environment variable.", file=sys.stderr)
+        sys.exit(1)
     
     # Validate CVE format
     cve_id_upper = args.cve_id.upper()
@@ -203,6 +217,25 @@ Examples:
     # Format and print output
     output = format_output(findings, args.format)
     print(output)
+    
+    # Write outputs for GitHub Actions if GITHUB_OUTPUT is set
+    github_output = os.environ.get('GITHUB_OUTPUT')
+    if github_output:
+        try:
+            with open(github_output, 'a') as f:
+                f.write(f"found={'true' if findings else 'false'}\n")
+                f.write(f"count={len(findings)}\n")
+        except Exception as e:
+            print(f"Warning: Failed to write GitHub outputs: {e}", file=sys.stderr)
+    
+    # Write results to files for artifact upload
+    try:
+        with open('cve-query-results.txt', 'w') as f:
+            f.write(output)
+        with open('cve-query-results.json', 'w') as f:
+            json.dump(findings, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Failed to write result files: {e}", file=sys.stderr)
     
     # Exit with appropriate code
     sys.exit(0 if findings else 1)

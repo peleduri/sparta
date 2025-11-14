@@ -20,18 +20,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install requests pygithub
-          # Copy security_utils.py to a location accessible to inline scripts
-          mkdir -p /tmp/sparta_utils
-          cp scripts/security_utils.py /tmp/sparta_utils/
-
       - name: Generate GitHub App token
         id: generate-token
         uses: actions/create-github-app-token@v1
@@ -58,388 +46,43 @@ jobs:
           GITHUB_ORG: ${{ github.repository_owner }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
         run: |
-          python3 << 'EOF'
-          import os
-          import json
-          import sys
-          from pathlib import Path
-          from github import Github
-          from github.Auth import Token
-          
-          # Import security utilities
-          sys.path.insert(0, '/tmp/sparta_utils')
-          from security_utils import (
-              sanitize_path, validate_org_name, validate_repo_name,
-              validate_repo_full_name, sanitize_error_message
-          )
-
-          # Validate and sanitize inputs
-          try:
-              org_name = validate_org_name(os.environ['GITHUB_ORG'])
-              installation_token = os.environ.get('GITHUB_APP_TOKEN', '')
-              if not installation_token:
-                  raise ValueError("GITHUB_APP_TOKEN environment variable is not set")
-          except (KeyError, ValueError) as e:
-              print(f"Error: Invalid input - {str(e)}")
-              sys.exit(1)
-          
-          # Tokens to sanitize in error messages
-          tokens_to_sanitize = [installation_token]
-          
-          try:
-              # Use installation token to access organization via PyGithub
-              token_auth = Token(installation_token)
-              g = Github(auth=token_auth)
-              org = g.get_organization(org_name)
-              
-              repos = []
-              for repo in org.get_repos():
-                  try:
-                      repo_name = validate_repo_name(repo.name)
-                      repo_full_name = validate_repo_full_name(repo.full_name)
-                      repos.append({
-                          'name': repo_name,
-                          'full_name': repo_full_name,
-                          'private': repo.private,
-                          'default_branch': repo.default_branch or 'main'
-                      })
-                  except ValueError as e:
-                      print(f"Warning: Skipping invalid repository {repo.name}: {sanitize_error_message(str(e), tokens_to_sanitize)}")
-                      continue
-              
-              print(f"Found {len(repos)} repositories")
-              
-              # Save repos list to file (validate path)
-              base_dir = Path.cwd()
-              repos_file = sanitize_path('repos.json', base_dir)
-              with open(repos_file, 'w') as f:
-                  json.dump(repos, f, indent=2)
-              
-              # Set output (using new format)
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f"count={len(repos)}\n")
-          except Exception as e:
-              error_msg = sanitize_error_message(str(e), tokens_to_sanitize)
-              print(f"Error: {error_msg}")
-              sys.exit(1)
-          EOF
-
-      - name: Setup Trivy
-        uses: aquasecurity/setup-trivy@v0.2.0
-        with:
-          version: 'v0.65.0'
-          cache: true
+          docker run --rm \
+            -v "${{ github.workspace }}":/workspace \
+            -v "${{ github.output }}":/github_output \
+            -w /workspace \
+            -e GITHUB_ORG \
+            -e GITHUB_APP_TOKEN \
+            -e GITHUB_OUTPUT=/github_output \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            get-repos
+        continue-on-error: false
 
       - name: Scan each repository
         env:
           GITHUB_ORG: ${{ github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          SCAN_DATE: ${{ github.run_id }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
-          python3 << 'EOF'
-          import os
-          import json
-          import subprocess
-          import shutil
-          import sys
-          from pathlib import Path
-          from datetime import datetime
-          
-          # Import security utilities
-          sys.path.insert(0, '/tmp/sparta_utils')
-          from security_utils import (
-              sanitize_path, validate_org_name, validate_repo_name,
-              validate_repo_full_name, sanitize_error_message
-          )
-
-          # Validate inputs
-          try:
-              org_name = validate_org_name(os.environ['GITHUB_ORG'])
-              current_repo = os.environ.get('GITHUB_REPOSITORY', '')
-              scan_date = datetime.now().strftime('%Y%m%d')
-              installation_token = os.environ.get('GITHUB_APP_TOKEN', '')
-              if not installation_token:
-                  raise ValueError("GITHUB_APP_TOKEN environment variable is not set")
-          except (KeyError, ValueError) as e:
-              print(f"Error: Invalid input - {str(e)}")
-              sys.exit(1)
-          
-          tokens_to_sanitize = [installation_token]
-          
-          # Read repos list (validate path)
-          try:
-              base_dir = Path.cwd()
-              repos_file = sanitize_path('repos.json', base_dir)
-              with open(repos_file, 'r') as f:
-                  repos = json.load(f)
-          except Exception as e:
-              print(f"Error: Failed to read repos file - {sanitize_error_message(str(e), tokens_to_sanitize)}")
-              sys.exit(1)
-          
-          # Validate and sanitize reports directory path
-          try:
-              base_dir = Path.cwd()
-              reports_base = sanitize_path('vulnerability-reports', base_dir)
-              reports_dir = sanitize_path(org_name, reports_base)
-              reports_dir.mkdir(parents=True, exist_ok=True)
-          except Exception as e:
-              print(f"Error: Invalid reports directory path - {sanitize_error_message(str(e), tokens_to_sanitize)}")
-              sys.exit(1)
-          
-          for repo in repos:
-              try:
-                  # Validate repository data
-                  repo_name = validate_repo_name(repo['name'])
-                  repo_full_name = validate_repo_full_name(repo.get('full_name', ''))
-                  default_branch = repo.get('default_branch', 'main') or 'main'
-              except (KeyError, ValueError) as e:
-                  print(f"Warning: Skipping invalid repository data: {sanitize_error_message(str(e), tokens_to_sanitize)}")
-                  continue
-              
-              # Skip cloning Sparta repo since we're already in it
-              if repo_full_name == current_repo:
-                  print(f"\n{'='*60}")
-                  print(f"Skipping clone for {repo_full_name} (already in this repository)")
-                  print(f"Scanning current repository...")
-                  print(f"{'='*60}")
-                  
-                  # Use current directory for scan
-                  repo_dir = Path('.')
-                  try:
-                      report_dir = sanitize_path(repo_name, reports_dir) / scan_date
-                      report_dir.mkdir(parents=True, exist_ok=True)
-                  except Exception as e:
-                      print(f"Error: Invalid report directory path - {sanitize_error_message(str(e), tokens_to_sanitize)}")
-                      continue
-                  
-                  # Run Trivy scan on current directory
-                  result = subprocess.run(
-                      [
-                          'trivy', 'fs',
-                          '--format', 'json',
-                          '--output', str(report_dir / 'trivy-report.json'),
-                          '--timeout', '120m0s',
-                          '--ignore-unfixed',
-                          '--scanners', 'vuln',
-                          '--vuln-type', 'os,library',
-                          '--severity', 'CRITICAL,HIGH,MEDIUM,LOW',
-                          '--cache-dir', f'{os.environ.get("GITHUB_WORKSPACE", ".")}/.cache/trivy',
-                          '.'
-                      ],
-                      capture_output=True,
-                      text=True,
-                      timeout=900
-                  )
-                  
-                  if result.returncode == 0:
-                      print(f"✓ Scan completed for {repo_full_name}")
-                  else:
-                      print(f"⚠ Scan completed with warnings for {repo_full_name}")
-                      if result.stderr:
-                          print(result.stderr)
-                  continue
-              
-              print(f"\n{'='*60}")
-              print(f"Scanning: {repo_full_name}")
-              print(f"{'='*60}")
-              
-              # Validate and create repo directory path
-              try:
-                  base_dir = Path.cwd()
-                  repo_dir_name = f'tmp-{repo_name}'
-                  # Sanitize repo_dir_name to prevent path traversal
-                  repo_dir_name = repo_dir_name.replace('..', '').replace('/', '').replace('\\', '')
-                  repo_dir = sanitize_path(repo_dir_name, base_dir)
-                  
-                  # Validate and create report directory
-                  report_dir = sanitize_path(repo_name, reports_dir) / scan_date
-                  report_dir.mkdir(parents=True, exist_ok=True)
-              except Exception as e:
-                  print(f"Error: Invalid directory path - {sanitize_error_message(str(e), tokens_to_sanitize)}")
-                  continue
-              
-              try:
-                  # Clone repository using token from environment variable
-                  # Token is masked, so safe to use in URL with capture_output=True
-                  clone_url = f"https://{installation_token}@github.com/{repo_full_name}.git"
-                  
-                  result_clone = subprocess.run(
-                      ['git', 'clone', '--depth', '1', '--branch', default_branch, clone_url, str(repo_dir)],
-                      capture_output=True,
-                      text=True,
-                      timeout=300
-                  )
-                  
-                  if result_clone.returncode != 0:
-                      error_msg = sanitize_error_message(result_clone.stderr, tokens_to_sanitize)
-                      raise Exception(f"Git clone failed: {error_msg}")
-                  
-                  # Run Trivy scan
-                  result = subprocess.run(
-                      [
-                          'trivy', 'fs',
-                          '--format', 'json',
-                          '--output', str(report_dir / 'trivy-report.json'),
-                          '--timeout', '120m0s',
-                          '--ignore-unfixed',
-                          '--scanners', 'vuln',
-                          '--vuln-type', 'os,library',
-                          '--severity', 'CRITICAL,HIGH,MEDIUM,LOW',
-                          '--cache-dir', f'{os.environ.get("GITHUB_WORKSPACE", ".")}/.cache/trivy',
-                          str(repo_dir)
-                      ],
-                      capture_output=True,
-                      text=True,
-                      timeout=900
-                  )
-                  
-                  if result.returncode == 0:
-                      print(f"✓ Scan completed for {repo_full_name}")
-                  else:
-                      print(f"⚠ Scan completed with warnings for {repo_full_name}")
-                      print(result.stderr)
-                  
-              except subprocess.TimeoutExpired:
-                  error_msg = sanitize_error_message('Scan timeout', tokens_to_sanitize)
-                  print(f"✗ Timeout scanning {repo_full_name}")
-                  # Create empty report with error
-                  error_report = {
-                      'error': error_msg,
-                      'repository': repo_full_name,
-                      'timestamp': datetime.now().isoformat()
-                  }
-                  try:
-                      with open(report_dir / 'trivy-report.json', 'w') as f:
-                          json.dump(error_report, f, indent=2)
-                  except Exception:
-                      pass
-              
-              except Exception as e:
-                  error_msg = sanitize_error_message(str(e), tokens_to_sanitize)
-                  print(f"✗ Error scanning {repo_full_name}: {error_msg}")
-                  # Create empty report with error (sanitized)
-                  error_report = {
-                      'error': error_msg,
-                      'repository': repo_full_name,
-                      'timestamp': datetime.now().isoformat()
-                  }
-                  try:
-                      with open(report_dir / 'trivy-report.json', 'w') as f:
-                          json.dump(error_report, f, indent=2)
-                  except Exception:
-                      pass
-              
-              finally:
-                  # Cleanup
-                  if repo_dir.exists():
-                      shutil.rmtree(repo_dir, ignore_errors=True)
-          
-          print(f"\n{'='*60}")
-          print(f"Scanning complete. Reports saved to vulnerability-reports/{org_name}/")
-          print(f"{'='*60}")
-          EOF
+          docker run --rm \
+            -v "${{ github.workspace }}":/workspace \
+            -w /workspace \
+            -e GITHUB_ORG \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_APP_TOKEN \
+            -e GITHUB_WORKSPACE=/workspace \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            scan-repos
 
       - name: Commit scan results
         env:
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python3 << 'EOF'
-          import os
-          import subprocess
-          import sys
-          from datetime import datetime
-          from pathlib import Path
-          
-          # Verify we're in the Sparta repository (not a cloned repo)
-          current_repo = os.environ.get('GITHUB_REPOSITORY', '')
-          if not current_repo:
-              print("Error: GITHUB_REPOSITORY environment variable is not set")
-              sys.exit(1)
-          
-          # Verify we're in the correct directory (Sparta repo, not a cloned repo)
-          # Check that we're not in a temporary cloned repo directory
-          current_dir = Path.cwd()
-          if current_dir.name.startswith('tmp-') or 'tmp-' in str(current_dir):
-              print(f"Error: Appears to be in a temporary cloned repository directory: {current_dir}")
-              print("This should not happen - commit should only run in Sparta repository")
-              sys.exit(1)
-          
-          # Verify git remote points to Sparta repository
-          result = subprocess.run(
-              ['git', 'remote', 'get-url', 'origin'],
-              capture_output=True,
-              text=True,
-              timeout=10
-          )
-          
-          if result.returncode != 0:
-              print("Error: Failed to get git remote URL")
-              sys.exit(1)
-          
-          remote_url = result.stdout.strip()
-          expected_repo = current_repo.lower()
-          
-          # Verify remote URL contains the Sparta repository name
-          if expected_repo not in remote_url.lower():
-              print(f"Error: Git remote does not match Sparta repository")
-              print(f"Expected repository: {expected_repo}")
-              print(f"Remote URL: {remote_url.replace(os.environ.get('GITHUB_APP_TOKEN', ''), '***')}")
-              print("Aborting commit to prevent pushing to wrong repository")
-              sys.exit(1)
-          
-          print(f"Verified: Committing to Sparta repository: {current_repo}")
-          
-          # Configure git
-          subprocess.run(['git', 'config', '--local', 'user.email', 'action@github.com'], check=True)
-          subprocess.run(['git', 'config', '--local', 'user.name', 'GitHub Action'], check=True)
-          
-          # Stage changes
-          result = subprocess.run(['git', 'add', 'vulnerability-reports/'], check=False)
-          
-          # Check if there are changes
-          result = subprocess.run(['git', 'diff', '--staged', '--quiet'], check=False)
-          if result.returncode == 0:
-              print("No changes to commit")
-              sys.exit(0)
-          
-          # Commit
-          commit_msg = f"Daily vulnerability scan results - {datetime.now().strftime('%Y-%m-%d')}"
-          subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
-          
-          # Push using token from environment variable
-          # Token is masked, so safe to use in URL with capture_output=True
-          installation_token = os.environ.get('GITHUB_APP_TOKEN', '')
-          if not installation_token:
-              print("Error: GITHUB_APP_TOKEN environment variable is not set")
-              sys.exit(1)
-          
-          repo_url = f"https://{installation_token}@github.com/{current_repo}.git"
-          
-          # Update remote URL to include token
-          subprocess.run(
-              ['git', 'remote', 'set-url', 'origin', repo_url],
-              check=True,
-              capture_output=True,
-              timeout=10
-          )
-          
-          # Push
-          result = subprocess.run(
-              ['git', 'push', 'origin', 'main'],
-              check=False,
-              capture_output=True,
-              text=True,
-              timeout=300
-          )
-          
-          if result.returncode == 0:
-              print(f"Successfully pushed scan results to Sparta repository: {current_repo}")
-          else:
-              # Sanitize error message
-              error_msg = result.stderr.replace(installation_token, '***')
-              print(f"Push failed: {error_msg}")
-              sys.exit(1)
-          EOF
-
+          docker run --rm \
+            -v "${{ github.workspace }}":/workspace \
+            -w /workspace \
+            -e GITHUB_APP_TOKEN \
+            -e GITHUB_REPOSITORY \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            commit-results

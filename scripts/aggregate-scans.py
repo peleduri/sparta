@@ -237,6 +237,8 @@ def generate_summary_report(stats: Dict[str, Any]) -> str:
 
 
 def main():
+    import os
+    
     parser = argparse.ArgumentParser(
         description='Aggregate and index Trivy scan results',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -247,18 +249,22 @@ Examples:
         """
     )
     
+    # Support environment variables for Docker usage
+    default_reports_dir = os.environ.get('REPORTS_DIR', 'vulnerability-reports')
+    default_output_dir = os.environ.get('OUTPUT_DIR', 'aggregated')
+    
     parser.add_argument(
         '--reports-dir',
         type=Path,
-        default=Path('vulnerability-reports'),
-        help='Directory containing vulnerability reports (default: vulnerability-reports)'
+        default=Path(default_reports_dir),
+        help='Directory containing vulnerability reports (default: vulnerability-reports or REPORTS_DIR env var)'
     )
     
     parser.add_argument(
         '--output-dir',
         type=Path,
-        default=Path('aggregated'),
-        help='Output directory for aggregated data (default: aggregated)'
+        default=Path(default_output_dir),
+        help='Output directory for aggregated data (default: aggregated or OUTPUT_DIR env var)'
     )
     
     args = parser.parse_args()

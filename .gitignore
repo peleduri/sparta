@@ -1,0 +1,62 @@
+# Log files and directories
+logs*/
+*.log
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+tmp-*/
+.tmp/
+
+# Credentials and secrets (extra safety)
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+credentials.json
+secrets.json
+.env
+.env.local
+
+# Vulnerability reports (optional - uncomment if you don't want to commit scan results)
+# vulnerability-reports/
+
+# Aggregated data (optional - uncomment if you don't want to commit aggregated results)
+# aggregated/
+
+# GitHub Actions artifacts
+.github_output
+.github_workflow_summary
+
+# Docker
+.dockerignore
+
+# Test files
+.pytest_cache/
+.coverage
+htmlcov/
+

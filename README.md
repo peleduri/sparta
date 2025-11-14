@@ -1,6 +1,10 @@
 # Sparta
 
+[![Public Repository](https://img.shields.io/badge/repository-public-brightgreen)](https://github.com/peleduri/sparta)
+
 This repository contains GitHub Actions workflows for scanning package vulnerabilities using Trivy across your GitHub organization.
+
+> **Note**: This is a public repository. All workflows use dynamic references and require you to configure secrets in your repository settings. No hardcoded credentials or organization-specific values are included.
 
 ## Overview
 
@@ -36,7 +40,7 @@ on:
 jobs:
   vulnerability-scan:
     name: Run Vulnerability Scan
-    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-package-vulnerability-scan.yml@main
+    uses: YOUR_ORG/sparta/.github/workflows/sparta-package-vulnerability-scan.yml@main
     # Optional: Override default inputs
     # with:
     #   scan-ref: '.'
@@ -121,7 +125,7 @@ on:
 jobs:
   query:
     name: Query CVE
-    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-query-cve.yml@main
+    uses: YOUR_ORG/sparta/.github/workflows/sparta-query-cve.yml@main
     with:
       cve-id: ${{ inputs.cve-id }}
       reports-dir: 'vulnerability-reports'
@@ -133,7 +137,7 @@ Or call it directly from another workflow:
 ```yaml
 jobs:
   query-cve:
-    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-query-cve.yml@main
+    uses: YOUR_ORG/sparta/.github/workflows/sparta-query-cve.yml@main
     with:
       cve-id: 'CVE-2024-1234'
       output-format: 'table'
@@ -197,7 +201,7 @@ on:
 jobs:
   aggregate:
     name: Aggregate Scan Results
-    uses: security-pillar-ai-poc/sparta/.github/workflows/sparta-aggregate-scans.yml@main
+    uses: YOUR_ORG/sparta/.github/workflows/sparta-aggregate-scans.yml@main
     with:
       reports-dir: 'vulnerability-reports'
       output-dir: 'aggregated'
@@ -234,9 +238,54 @@ The workflow generates and uploads as artifacts:
 
 ### Installation
 
-1. Clone or fork this repository
-2. Ensure the workflows are accessible to other repositories in your organization
-3. The workflows will automatically install required dependencies when running
+1. **Fork or Clone this repository** to your GitHub organization
+   ```bash
+   git clone https://github.com/peleduri/sparta.git
+   # Or fork the repository to your organization
+   ```
+
+2. **Update workflow references** (if using from a fork):
+   - Replace `YOUR_ORG` in the README examples with your actual GitHub organization name
+   - If you forked the repo, workflows will automatically use your organization name via `${{ github.repository_owner }}`
+
+3. **Configure secrets** (see Configuration section below)
+
+4. **Ensure workflows are accessible** to other repositories in your organization (if using reusable workflows)
+
+5. The workflows will automatically install required dependencies when running
+
+### Configuration
+
+#### GitHub App Setup (for Daily Organization Scan)
+
+The daily organization scan requires a GitHub App for authentication. Set up the following secrets in your repository:
+
+- `SPARTA_APP_ID`: Your GitHub App ID
+- `SPARTA_APP_PRIVATE_KEY`: Your GitHub App private key
+
+To create a GitHub App:
+1. Go to your organization settings → Developer settings → GitHub Apps
+2. Create a new GitHub App with the following permissions:
+   - Repository permissions: Contents (Read), Metadata (Read)
+   - Organization permissions: Members (Read-only) - if scanning private repos
+3. Install the app on your organization
+4. Copy the App ID and generate a private key
+5. Add them as secrets in your repository settings
+
+#### Docker Image
+
+The workflows use a Docker image hosted on GitHub Container Registry (GHCR). The image is automatically built and pushed by the `sparta-build-docker.yml` workflow when you push changes to the repository.
+
+**Image naming**: The image name automatically follows the pattern: `ghcr.io/{your-org}/sparta:latest`
+- When run in `peleduri/sparta`, it will be: `ghcr.io/peleduri/sparta:latest`
+- When run in your fork, it will be: `ghcr.io/{your-org}/sparta:latest`
+
+**First-time setup**: 
+1. Push your code to trigger the Docker build workflow
+2. Wait for the build to complete (check the Actions tab)
+3. The image will be available at `ghcr.io/{your-org}/sparta:latest`
+
+**Using a custom image**: To use a different Docker registry, update the workflow files to reference your custom image location.
 
 ## Workflow Permissions
 
@@ -313,6 +362,31 @@ By default, all scan results are kept. To implement retention, you can:
 - Ensure the reports directory path is correct
 - Check workflow artifacts for detailed results
 - Review workflow logs for any parsing errors
+
+## Security
+
+### Public Repository Safety
+
+This repository is designed to be safely published as a public repository:
+
+- ✅ **No hardcoded secrets**: All secrets are referenced via GitHub Secrets (`${{ secrets.* }}`)
+- ✅ **Dynamic organization references**: All workflows use `${{ github.repository_owner }}` - automatically adapts to your organization
+- ✅ **Dynamic Docker images**: Image names use `ghcr.io/${{ github.repository_owner }}/sparta:latest`
+- ✅ **Environment-based configuration**: All scripts read from environment variables
+- ✅ **No sensitive data**: Log files and temporary files are excluded via `.gitignore`
+
+### Required Secrets
+
+Before using the workflows, you must configure these secrets in your repository settings:
+
+- `SPARTA_APP_ID`: GitHub App ID (for daily organization scan)
+- `SPARTA_APP_PRIVATE_KEY`: GitHub App private key (for daily organization scan)
+
+**Important**: Never commit secrets or credentials to the repository. Always use GitHub Secrets.
+
+### Reporting Security Issues
+
+If you discover a security vulnerability, please report it responsibly. Do not open a public issue.
 
 ## Contributing
 
