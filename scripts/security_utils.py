@@ -108,22 +108,19 @@ def secure_git_clone(
                 # Write credential in format: https://token@github.com
                 with os.fdopen(cred_fd, 'w') as f:
                     f.write(f"https://{token}@github.com\n")
-                
-                # Configure git to use credential file
-                subprocess.run(
-                    ['git', 'config', '--global', 'credential.helper', f'store --file={cred_file}'],
-                    check=True,
-                    capture_output=True,
-                    timeout=10
-                )
             except Exception:
                 if cred_file and os.path.exists(cred_file):
                     os.unlink(cred_file)
                 raise
         
-        # Clone repository
+        # Clone repository with inline credential helper (no global config needed)
+        clone_cmd = ['git', 'clone', '--depth', '1', '--branch', branch, repo_url, str(target_dir)]
+        if token and cred_file:
+            # Use inline -c flag to pass credential helper without requiring global config
+            clone_cmd = ['git', '-c', f'credential.helper=store --file={cred_file}'] + clone_cmd[1:]
+        
         result = subprocess.run(
-            ['git', 'clone', '--depth', '1', '--branch', branch, repo_url, str(target_dir)],
+            clone_cmd,
             check=False,
             capture_output=True,
             text=True,
@@ -134,17 +131,6 @@ def secure_git_clone(
         if cred_file and os.path.exists(cred_file):
             try:
                 os.unlink(cred_file)
-            except Exception:
-                pass
-        
-        # Reset credential helper
-        if token:
-            try:
-                subprocess.run(
-                    ['git', 'config', '--global', '--unset', 'credential.helper'],
-                    capture_output=True,
-                    timeout=10
-                )
             except Exception:
                 pass
         
