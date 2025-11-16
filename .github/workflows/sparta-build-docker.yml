@@ -70,7 +70,21 @@ jobs:
           platforms: linux/amd64
           load: true
 
-      - name: Scan Docker image with Trivy
+      - name: Scan Docker image with Trivy (Table Format)
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          scan-type: 'image'
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          scanners: 'vuln'
+          vuln-type: 'os,library'
+          version: 'latest'
+          cache: true
+
+      - name: Scan Docker image with Trivy (SARIF Format)
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'image'
