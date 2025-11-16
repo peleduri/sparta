@@ -409,9 +409,11 @@ git tag v1.x.x
 git push origin v1.x.x
 ```
 The workflow will automatically:
-- Create a GitHub release
-- Generate release notes from commit messages
-- Make the release available for use in workflows
+- **Create GitHub release** - For the tagged commit
+- **Generate release notes** - From commit messages since last tag
+- **Make release available** - For use in workflows
+
+**Important**: Only tag commits that have already been built and verified on the main branch. The release workflow assumes the tagged commit is already working and tested.
 
 **Manual Options**:
 1. **Via GitHub UI**: Go to https://github.com/security-pillar-ai-poc/sparta/releases/new

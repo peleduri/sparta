@@ -40,27 +40,20 @@ jobs:
           fi
           
           # Create release notes
-          NOTES="## Sparta $TAG_NAME
+          cat > release-notes.md << EOF
+          ## Sparta $TAG_NAME
           
-### Changes
-
-$CHANGELOG
-
-### Installation
-
-Use this version in your workflows:
-\`\`\`yaml
-uses: ${{ github.repository_owner }}/sparta/.github/workflows/sparta-package-vulnerability-scan.yml@$TAG_NAME
-\`\`\`
-"
+          ### Changes
           
-          # Save to file for multiline output
-          echo "$NOTES" > release-notes.md
+          $CHANGELOG
           
-          # Also set as output (truncated for GitHub Actions)
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          ### Installation
+          
+          Use this version in your workflows:
+          \`\`\`yaml
+          uses: ${{ github.repository_owner }}/sparta/.github/workflows/sparta-package-vulnerability-scan.yml@$TAG_NAME
+          \`\`\`
+          EOF
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
