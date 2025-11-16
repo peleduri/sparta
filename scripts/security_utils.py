@@ -114,13 +114,19 @@ def secure_git_clone(
                 raise
         
         # Clone repository with inline credential helper (no global config needed)
+        # Use GIT_CONFIG_PARAMETERS env var (more secure than shell=True)
         clone_cmd = ['git', 'clone', '--depth', '1', '--branch', branch, repo_url, str(target_dir)]
+        
+        # Set up environment with credential helper if token is provided
+        env = os.environ.copy()
         if token and cred_file:
-            # Use inline -c flag to pass credential helper without requiring global config
-            clone_cmd = ['git', '-c', f'credential.helper=store --file={cred_file}'] + clone_cmd[1:]
+            # Use GIT_CONFIG_PARAMETERS to pass credential helper without shell=True
+            # This is more secure than using shell=True with shlex.quote
+            env['GIT_CONFIG_PARAMETERS'] = f"'credential.helper=store --file={cred_file}'"
         
         result = subprocess.run(
             clone_cmd,
+            env=env,
             check=False,
             capture_output=True,
             text=True,
