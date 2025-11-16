@@ -107,7 +107,53 @@ def main():
             timeout=10
         )
         
+        # Fetch latest changes from remote
+        print("Fetching latest changes from remote...")
+        fetch_result = subprocess.run(
+            ['git', 'fetch', 'origin', 'main'],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if fetch_result.returncode != 0:
+            error_msg = sanitize_error_message(fetch_result.stderr, [installation_token])
+            print(f"Warning: Failed to fetch from remote: {error_msg}")
+            print("Continuing with push attempt...")
+        else:
+            # Pull and rebase local commits on top of remote
+            print("Pulling latest changes and rebasing local commits...")
+            pull_result = subprocess.run(
+                ['git', 'pull', '--rebase', 'origin', 'main'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if pull_result.returncode != 0:
+                error_msg = sanitize_error_message(pull_result.stderr, [installation_token])
+                # Check if it's a rebase conflict
+                if 'CONFLICT' in pull_result.stderr or 'conflict' in pull_result.stderr.lower():
+                    print(f"Error: Rebase conflict detected. Cannot automatically merge.")
+                    print(f"Details: {error_msg}")
+                    print("This usually happens when multiple workflow runs commit simultaneously.")
+                    print("The next workflow run will handle this. Aborting push.")
+                    # Abort the rebase
+                    subprocess.run(
+                        ['git', 'rebase', '--abort'],
+                        check=False,
+                        capture_output=True,
+                        timeout=30
+                    )
+                    sys.exit(1)
+                else:
+                    print(f"Warning: Failed to pull and rebase: {error_msg}")
+                    print("Continuing with push attempt...")
+        
         # Push
+        print("Pushing changes to remote...")
         result = subprocess.run(
             ['git', 'push', 'origin', 'main'],
             check=False,
