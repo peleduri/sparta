@@ -50,6 +50,7 @@ jobs:
       - name: Aggregate scan results
         env:
           REPORTS_DIR: ${{ inputs.reports-dir || github.event.inputs.reports-dir || 'vulnerability-reports' }}
+          # Don't set OUTPUT_DIR to use default, which will auto-generate timestamped path
           OUTPUT_DIR: ${{ inputs.output-dir || github.event.inputs.output-dir || 'aggregated' }}
         run: |
           docker run --rm \
@@ -66,7 +67,8 @@ jobs:
         if: always()
         with:
           name: aggregated-scan-results
-          path: ${{ inputs.output-dir || github.event.inputs.output-dir || 'aggregated' }}
+          # Find the most recent timestamped aggregated directory if using default
+          path: ${{ inputs.output-dir || github.event.inputs.output-dir || 'vulnerability-reports/security-pillar-ai-poc/sparta' }}
           retention-days: 90
 
       - name: Set workflow summary
@@ -74,8 +76,13 @@ jobs:
         run: |
           echo "## Aggregation Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          OUTPUT_DIR="${{ inputs.output-dir || github.event.inputs.output-dir || 'aggregated' }}"
-          if [ -f "$OUTPUT_DIR/summary.txt" ]; then
+          # Find the most recent timestamped aggregated directory if using default
+          if [ -z "${{ inputs.output-dir || github.event.inputs.output-dir }}" ]; then
+            OUTPUT_DIR=$(find vulnerability-reports/security-pillar-ai-poc/sparta -type d -name aggregated -path "*/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/aggregated" | sort | tail -1)
+          else
+            OUTPUT_DIR="${{ inputs.output-dir || github.event.inputs.output-dir }}"
+          fi
+          if [ -n "$OUTPUT_DIR" ] && [ -f "$OUTPUT_DIR/summary.txt" ]; then
             echo '```' >> $GITHUB_STEP_SUMMARY
             cat "$OUTPUT_DIR/summary.txt" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY

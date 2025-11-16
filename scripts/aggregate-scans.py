@@ -273,7 +273,27 @@ Examples:
     try:
         base_dir = Path.cwd()
         sanitized_reports_dir = sanitize_path(str(args.reports_dir), base_dir)
-        sanitized_output_dir = sanitize_path(str(args.output_dir), base_dir)
+        
+        # If output-dir is the default value ('aggregated'), create timestamped path
+        # within vulnerability-reports structure
+        # Check if the output_dir is the simple default 'aggregated' path
+        # (not a custom path that happens to end in 'aggregated')
+        output_dir_str = str(args.output_dir)
+        is_default_aggregated = (
+            output_dir_str == 'aggregated' or 
+            output_dir_str == default_output_dir or
+            (len(Path(output_dir_str).parts) == 1 and Path(output_dir_str).name == 'aggregated')
+        )
+        
+        if is_default_aggregated:
+            # Auto-generate timestamped path: vulnerability-reports/security-pillar-ai-poc/sparta/{YYYYMMDD}/aggregated/
+            timestamp = datetime.now().strftime('%Y%m%d')
+            auto_output_dir = sanitized_reports_dir / 'security-pillar-ai-poc' / 'sparta' / timestamp / 'aggregated'
+            sanitized_output_dir = sanitize_path(str(auto_output_dir), base_dir)
+            print(f"Using auto-generated timestamped output directory: {sanitized_output_dir}")
+        else:
+            # Use explicitly provided output directory
+            sanitized_output_dir = sanitize_path(str(args.output_dir), base_dir)
     except ValueError as e:
         print(f"Error: Invalid path: {e}", file=sys.stderr)
         sys.exit(1)
