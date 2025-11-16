@@ -57,23 +57,22 @@ def main():
         print(f"Found {len(repos)} repositories")
         
         # Save repos list to file
-        # Try to write to workspace first, if that fails write to /tmp/workspace (mounted temp dir)
+        # Try to write to workspace first, if that fails write to /tmp/repos.json (sparta user owns /tmp)
         base_dir = Path.cwd()
         repos_file = sanitize_path('repos.json', base_dir)
-        tmp_workspace_file = Path('/tmp/workspace/repos.json')
+        tmp_file = Path('/tmp/repos.json')
         
         # Try to write to workspace first
         try:
             with open(repos_file, 'w') as f:
                 json.dump(repos, f, indent=2)
         except PermissionError:
-            # If we can't write to workspace, write to /tmp/workspace (mounted temp dir)
+            # If we can't write to workspace, write to /tmp/repos.json (sparta user owns /tmp)
             # The workflow will copy it to workspace after container exits
             try:
-                tmp_workspace_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(tmp_workspace_file, 'w') as f:
+                with open(tmp_file, 'w') as f:
                     json.dump(repos, f, indent=2)
-                print(f"Warning: Cannot write to workspace, file saved to {tmp_workspace_file} (will be copied by workflow)")
+                print(f"Warning: Cannot write to workspace, file saved to {tmp_file} (will be copied by workflow)")
             except Exception as e:
                 print(f"Error: Failed to write repos file - {sanitize_error_message(str(e), tokens_to_sanitize)}")
                 raise
