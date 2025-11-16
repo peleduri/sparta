@@ -10,7 +10,7 @@ RUN apk add --no-cache \
     wget \
     ca-certificates
 
-# Install Trivy (latest version) - download and install directly
+# Install Trivy (latest version) - download to file first, then extract (fixes ARM64 qemu emulation issues)
 RUN ARCH=$(uname -m) && \
     case ${ARCH} in \
         x86_64) TRIVY_ARCH="64bit" ;; \
@@ -18,10 +18,11 @@ RUN ARCH=$(uname -m) && \
         *) TRIVY_ARCH="64bit" ;; \
     esac && \
     TRIVY_VERSION=$(wget -qO- https://api.github.com/repos/aquasecurity/trivy/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/') && \
-    wget -qO- https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-${TRIVY_ARCH}.tar.gz | \
-    tar -xz -C /tmp && \
+    wget -q -O /tmp/trivy.tar.gz https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-${TRIVY_ARCH}.tar.gz && \
+    tar -xz -f /tmp/trivy.tar.gz -C /tmp && \
     mv /tmp/trivy /usr/local/bin/trivy && \
     chmod +x /usr/local/bin/trivy && \
+    rm -f /tmp/trivy.tar.gz && \
     trivy --version
 
 # Create non-root user (requires root)
