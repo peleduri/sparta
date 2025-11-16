@@ -388,6 +388,52 @@ Before using the workflows, you must configure these secrets in your repository 
 
 If you discover a security vulnerability, please report it responsibly. Do not open a public issue.
 
+## Release Process
+
+**Important**: Create a GitHub release for all major changes.
+
+### When to Create a Release
+
+Create a release when you:
+- Add new features or workflows
+- Make significant security improvements
+- Update dependencies or base images
+- Change workflow behavior or configuration
+- Fix critical bugs
+
+### How to Create a Release
+
+**Automated (Recommended)**: Push a version tag to automatically create a release:
+```bash
+git tag v1.x.x
+git push origin v1.x.x
+```
+The workflow will automatically:
+- Create a GitHub release
+- Generate release notes from commit messages
+- Make the release available for use in workflows
+
+**Manual Options**:
+1. **Via GitHub UI**: Go to https://github.com/security-pillar-ai-poc/sparta/releases/new
+2. **Via GitHub CLI**:
+   ```bash
+   gh release create v1.x.x --title "Sparta v1.x.x - [Description]" --notes "[Release notes]"
+   ```
+
+### Release Versioning
+
+- **Major (v1.0.0)**: Breaking changes, major new features
+- **Minor (v1.1.0)**: New features, enhancements (backward compatible)
+- **Patch (v1.0.1)**: Bug fixes, minor improvements
+
+### Release Notes Template
+
+Include:
+- **Features**: New functionality added
+- **Security**: Security improvements or fixes
+- **Improvements**: Enhancements to existing features
+- **Bug Fixes**: Issues resolved
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
