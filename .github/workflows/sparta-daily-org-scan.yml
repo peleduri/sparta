@@ -54,8 +54,11 @@ jobs:
           GITHUB_ORG: ${{ github.repository_owner }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
         run: |
+          # Create a temp directory for file exchange
+          TEMP_DIR=$(mktemp -d)
           docker run --rm \
             -v "${{ github.workspace }}":/workspace \
+            -v "$TEMP_DIR":/tmp/workspace \
             -v "${{ github.output }}":/github_output \
             -w /workspace \
             -e GITHUB_ORG \
@@ -63,6 +66,11 @@ jobs:
             -e GITHUB_OUTPUT=/github_output \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
             get-repos
+          # Copy repos.json from container /tmp to workspace if it exists there
+          if [ -f "$TEMP_DIR/repos.json" ]; then
+            cp "$TEMP_DIR/repos.json" "${{ github.workspace }}/repos.json"
+          fi
+          rm -rf "$TEMP_DIR"
         continue-on-error: false
 
       - name: Scan each repository

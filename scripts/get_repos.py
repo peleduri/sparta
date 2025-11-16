@@ -56,11 +56,27 @@ def main():
         
         print(f"Found {len(repos)} repositories")
         
-        # Save repos list to file (validate path)
+        # Save repos list to file
+        # Try to write to workspace first, if that fails write to /tmp/workspace (mounted temp dir)
         base_dir = Path.cwd()
         repos_file = sanitize_path('repos.json', base_dir)
-        with open(repos_file, 'w') as f:
-            json.dump(repos, f, indent=2)
+        tmp_workspace_file = Path('/tmp/workspace/repos.json')
+        
+        # Try to write to workspace first
+        try:
+            with open(repos_file, 'w') as f:
+                json.dump(repos, f, indent=2)
+        except PermissionError:
+            # If we can't write to workspace, write to /tmp/workspace (mounted temp dir)
+            # The workflow will copy it to workspace after container exits
+            try:
+                tmp_workspace_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(tmp_workspace_file, 'w') as f:
+                    json.dump(repos, f, indent=2)
+                print(f"Warning: Cannot write to workspace, file saved to {tmp_workspace_file} (will be copied by workflow)")
+            except Exception as e:
+                print(f"Error: Failed to write repos file - {sanitize_error_message(str(e), tokens_to_sanitize)}")
+                raise
         
         # Set output (using new format)
         github_output = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
