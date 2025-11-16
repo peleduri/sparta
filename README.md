@@ -263,14 +263,59 @@ The daily organization scan requires a GitHub App for authentication. Set up the
 - `SPARTA_APP_ID`: Your GitHub App ID
 - `SPARTA_APP_PRIVATE_KEY`: Your GitHub App private key
 
-To create a GitHub App:
-1. Go to your organization settings → Developer settings → GitHub Apps
-2. Create a new GitHub App with the following permissions:
-   - Repository permissions: Contents (Read), Metadata (Read)
-   - Organization permissions: Members (Read-only) - if scanning private repos
-3. Install the app on your organization
-4. Copy the App ID and generate a private key
-5. Add them as secrets in your repository settings
+**Step-by-Step Setup:**
+
+1. **Create GitHub App:**
+   - Go to your organization settings → Developer settings → GitHub Apps
+   - Click "New GitHub App" or edit existing app
+
+2. **Configure Repository Permissions:**
+   - ✅ **Contents**: Read (REQUIRED - allows cloning repositories)
+   - ✅ **Metadata**: Read (REQUIRED - allows reading repository information)
+   - ⚠️ **Pull requests**: Read (optional - only if scanning PRs)
+
+3. **Configure Organization Permissions:**
+   - ✅ **Members**: Read-only (REQUIRED - for accessing private repositories in the organization)
+
+4. **Install the App:**
+   - **CRITICAL**: Install on the **entire organization**, not individual repositories
+   - Go to: Install App → Select your organization
+   - Choose: **"All repositories"** (not "Only select repositories")
+   - This ensures access to all repos including private ones
+
+5. **Get App Credentials:**
+   - Copy the **App ID** from the app settings
+   - Generate and download a **Private Key** (you can only download it once)
+   - Add both as secrets in your repository: Settings → Secrets and variables → Actions
+
+**Important Notes:**
+- ❌ **Administration permission is NOT required** for cloning repositories
+- ✅ **Contents: Read** is the only repository permission needed for cloning
+- ✅ **Members: Read-only** is required for accessing private organization repositories
+- ✅ App must be installed on **"All repositories"** to access private repos
+
+**Troubleshooting Permission Issues:**
+
+If you see errors like `fatal: could not read Username for 'https://github.com'` when cloning private repos:
+
+1. **Verify App Installation:**
+   - Go to your organization → Settings → Installed GitHub Apps
+   - Find your Sparta app and verify it shows "All repositories"
+   - If it shows "Only select repositories", reinstall with "All repositories"
+
+2. **Verify Permissions:**
+   - Go to your GitHub App settings → Permissions & events
+   - Verify **Contents: Read** is set
+   - Verify **Members: Read-only** is set (for private repos)
+   - Save changes if modified
+
+3. **Check Token Generation:**
+   - Verify the workflow step "Generate GitHub App token" succeeds
+   - Check that `SPARTA_APP_ID` and `SPARTA_APP_PRIVATE_KEY` secrets are set correctly
+
+4. **Verify Repository Access:**
+   - The app must be installed on the organization level, not individual repos
+   - Private repos require the app to have "All repositories" access
 
 #### Docker Image
 

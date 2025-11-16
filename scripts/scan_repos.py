@@ -140,7 +140,38 @@ def main():
             )
             
             if not success:
-                raise Exception(f"Git clone failed: {error_msg}")
+                # Clone failed - create error report and skip to next repo
+                error_msg_sanitized = sanitize_error_message(error_msg, tokens_to_sanitize)
+                print(f"✗ Error cloning {repo_full_name}: {error_msg_sanitized}")
+                error_report = {
+                    'error': f"Git clone failed: {error_msg_sanitized}",
+                    'repository': repo_full_name,
+                    'timestamp': datetime.now().isoformat(),
+                    'clone_url': clone_url
+                }
+                try:
+                    with open(report_dir / 'trivy-report.json', 'w') as f:
+                        json.dump(error_report, f, indent=2)
+                except Exception as write_err:
+                    print(f"Warning: Failed to write error report: {sanitize_error_message(str(write_err), tokens_to_sanitize)}")
+                continue  # Skip to next repository
+            
+            # Verify cloned directory exists and is not empty
+            if not repo_dir.exists() or not any(repo_dir.iterdir()):
+                error_msg = f"Cloned directory is missing or empty: {repo_dir}"
+                error_msg_sanitized = sanitize_error_message(error_msg, tokens_to_sanitize)
+                print(f"✗ Error: {error_msg_sanitized}")
+                error_report = {
+                    'error': error_msg_sanitized,
+                    'repository': repo_full_name,
+                    'timestamp': datetime.now().isoformat()
+                }
+                try:
+                    with open(report_dir / 'trivy-report.json', 'w') as f:
+                        json.dump(error_report, f, indent=2)
+                except Exception:
+                    pass
+                continue  # Skip to next repository
             
             # Run Trivy scan
             result = subprocess.run(
@@ -165,11 +196,12 @@ def main():
                 print(f"✓ Scan completed for {repo_full_name}")
             else:
                 print(f"⚠ Scan completed with warnings for {repo_full_name}")
-                print(result.stderr)
+                if result.stderr:
+                    print(result.stderr)
             
         except subprocess.TimeoutExpired:
             error_msg = sanitize_error_message('Scan timeout', tokens_to_sanitize)
-            print(f"✗ Timeout scanning {repo_full_name}")
+            print(f"✗ Timeout scanning {repo_full_name}: {error_msg}")
             # Create empty report with error
             error_report = {
                 'error': error_msg,
@@ -179,8 +211,8 @@ def main():
             try:
                 with open(report_dir / 'trivy-report.json', 'w') as f:
                     json.dump(error_report, f, indent=2)
-            except Exception:
-                pass
+            except Exception as write_err:
+                print(f"Warning: Failed to write error report: {sanitize_error_message(str(write_err), tokens_to_sanitize)}")
         
         except Exception as e:
             error_msg = sanitize_error_message(str(e), tokens_to_sanitize)
@@ -194,8 +226,8 @@ def main():
             try:
                 with open(report_dir / 'trivy-report.json', 'w') as f:
                     json.dump(error_report, f, indent=2)
-            except Exception:
-                pass
+            except Exception as write_err:
+                print(f"Warning: Failed to write error report: {sanitize_error_message(str(write_err), tokens_to_sanitize)}")
         
         finally:
             # Cleanup

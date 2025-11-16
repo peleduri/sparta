@@ -84,9 +84,11 @@ def main():
     import tempfile
     cred_fd, cred_file = tempfile.mkstemp(text=True)
     try:
-        # Write credential in format: https://token@github.com
+        # Write credential in format: https://x-access-token:TOKEN@github.com
+        # This format is required for GitHub App installation tokens per:
+        # https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
         with os.fdopen(cred_fd, 'w') as f:
-            f.write(f"https://{installation_token}@github.com\n")
+            f.write(f"https://x-access-token:{installation_token}@github.com\n")
         
         # Configure git to use credential file
         subprocess.run(

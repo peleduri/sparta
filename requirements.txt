@@ -10,3 +10,6 @@ requests==2.32.5
 # https://github.com/PyGithub/PyGithub/releases/tag/v2.8.1
 PyGithub==2.8.1
 
+# Testing framework
+pytest==8.3.4
+

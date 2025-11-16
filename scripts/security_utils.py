@@ -105,33 +105,54 @@ def secure_git_clone(
             # Create temporary credential file
             cred_fd, cred_file = tempfile.mkstemp(text=True)
             try:
-                # Write credential in format: https://token@github.com
+                # Write credential in format: https://x-access-token:TOKEN@github.com
+                # This format is required for GitHub App installation tokens per:
+                # https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation
                 with os.fdopen(cred_fd, 'w') as f:
-                    f.write(f"https://{token}@github.com\n")
+                    f.write(f"https://x-access-token:{token}@github.com\n")
             except Exception:
                 if cred_file and os.path.exists(cred_file):
                     os.unlink(cred_file)
                 raise
         
         # Clone repository with inline credential helper (no global config needed)
-        # Use GIT_CONFIG_PARAMETERS env var (more secure than shell=True)
-        clone_cmd = ['git', 'clone', '--depth', '1', '--branch', branch, repo_url, str(target_dir)]
+        # Use shell=True with shlex.quote() for credential helper (most reliable for complex args)
+        import shlex
         
-        # Set up environment with credential helper if token is provided
+        # Set up environment
         env = os.environ.copy()
-        if token and cred_file:
-            # Use GIT_CONFIG_PARAMETERS to pass credential helper without shell=True
-            # This is more secure than using shell=True with shlex.quote
-            env['GIT_CONFIG_PARAMETERS'] = f"'credential.helper=store --file={cred_file}'"
+        # Prevent interactive credential prompts (important for non-interactive environments)
+        env['GIT_TERMINAL_PROMPT'] = '0'
         
-        result = subprocess.run(
-            clone_cmd,
-            env=env,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
+        if token and cred_file:
+            # Use shell command with proper quoting for credential helper
+            # shlex.quote() ensures security by properly escaping all inputs
+            safe_cred_file = shlex.quote(str(cred_file))
+            safe_branch = shlex.quote(branch)
+            safe_repo_url = shlex.quote(repo_url)
+            safe_target_dir = shlex.quote(str(target_dir))
+            
+            clone_cmd = f"git -c 'credential.helper=store --file={safe_cred_file}' clone --depth 1 --branch {safe_branch} {safe_repo_url} {safe_target_dir}"
+            result = subprocess.run(
+                clone_cmd,
+                shell=True,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+        else:
+            # No token, use regular list-based clone (more secure when no complex args)
+            clone_cmd = ['git', 'clone', '--depth', '1', '--branch', branch, repo_url, str(target_dir)]
+            result = subprocess.run(
+                clone_cmd,
+                env=env,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
         
         # Clean up credential file
         if cred_file and os.path.exists(cred_file):
