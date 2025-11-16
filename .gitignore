@@ -42,9 +42,6 @@ secrets.json
 .env
 .env.local
 
-# Vulnerability reports (optional - uncomment if you don't want to commit scan results)
-# Note: These files may contain sensitive data from scan results
-vulnerability-reports/
 
 # Aggregated data (optional - uncomment if you don't want to commit aggregated results)
 # aggregated/
