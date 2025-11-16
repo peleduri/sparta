@@ -53,6 +53,7 @@ jobs:
           OUTPUT_DIR: ${{ inputs.output-dir || github.event.inputs.output-dir || 'aggregated' }}
         run: |
           docker run --rm \
+            --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
             -w /workspace \
             -e REPORTS_DIR \

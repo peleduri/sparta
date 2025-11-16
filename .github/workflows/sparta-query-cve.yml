@@ -73,6 +73,7 @@ jobs:
           OUTPUT_FORMAT: ${{ inputs.output-format || github.event.inputs.output-format || 'table' }}
         run: |
           docker run --rm \
+            --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
             -v "${{ github.output }}":/github_output \
             -w /workspace \

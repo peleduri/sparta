@@ -54,28 +54,16 @@ jobs:
           GITHUB_ORG: ${{ github.repository_owner }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
         run: |
-          # Create a temp directory for file exchange
-          # Mount it to /tmp in container so script can write to /tmp/repos.json
-          TEMP_DIR=$(mktemp -d)
-          chmod 777 "$TEMP_DIR"  # Ensure container user can write
-          CONTAINER_ID=$(docker run -d \
+          docker run --rm \
+            --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
-            -v "$TEMP_DIR":/tmp \
             -v "${{ github.output }}":/github_output \
             -w /workspace \
             -e GITHUB_ORG \
             -e GITHUB_APP_TOKEN \
             -e GITHUB_OUTPUT=/github_output \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
-            get-repos)
-          docker wait "$CONTAINER_ID"
-          docker logs "$CONTAINER_ID"
-          # Copy repos.json from container /tmp to workspace if it exists there
-          if [ -f "$TEMP_DIR/repos.json" ]; then
-            cp "$TEMP_DIR/repos.json" "${{ github.workspace }}/repos.json"
-          fi
-          docker rm "$CONTAINER_ID"
-          rm -rf "$TEMP_DIR"
+            get-repos
         continue-on-error: false
 
       - name: Scan each repository
@@ -86,6 +74,7 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
           docker run --rm \
+            --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
             -w /workspace \
             -e GITHUB_ORG \
@@ -101,6 +90,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           docker run --rm \
+            --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
             -w /workspace \
             -e GITHUB_APP_TOKEN \

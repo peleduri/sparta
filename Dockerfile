@@ -75,6 +75,10 @@ WORKDIR /app
 # Add user's local bin to PATH for Python packages
 ENV PATH="/home/sparta/.local/bin:${PATH}"
 
+# Set PYTHONPATH to include sparta user's site-packages
+# This allows Python packages to be found when running with --user flag
+ENV PYTHONPATH="/home/sparta/.local/lib/python3.13/site-packages:${PYTHONPATH}"
+
 # Switch to non-root user immediately (security: never use root)
 USER sparta
 
