@@ -272,16 +272,34 @@ def scan_repository(repo, org_name, reports_dir, scan_date, current_repo, instal
         if repo_dir and repo_dir.exists():
             shutil.rmtree(repo_dir, ignore_errors=True)
 
+def get_token_for_org(org_name, token_map, default_token):
+    """Get the appropriate token for an organization from the token map."""
+    if token_map:
+        return token_map.get(org_name, default_token)
+    return default_token
+
 def main():
     # Validate inputs
     current_repo = os.environ.get('GITHUB_REPOSITORY', '')
     scan_date = datetime.now().strftime('%Y%m%d')
     installation_token = os.environ.get('GITHUB_APP_TOKEN', '')
+    token_map_json = os.environ.get('GITHUB_APP_TOKEN_MAP', '')
+    
+    # Parse token map if provided
+    token_map = {}
+    if token_map_json:
+        try:
+            token_map = json.loads(token_map_json)
+            tokens_to_sanitize = list(token_map.values()) + [installation_token]
+        except json.JSONDecodeError:
+            print("Warning: Failed to parse GITHUB_APP_TOKEN_MAP, using default token")
+            tokens_to_sanitize = [installation_token]
+    else:
+        tokens_to_sanitize = [installation_token]
+    
     if not installation_token:
         print("Error: GITHUB_APP_TOKEN environment variable is not set")
         sys.exit(1)
-    
-    tokens_to_sanitize = [installation_token]
     
     # Read repos list (validate path)
     try:
@@ -360,9 +378,12 @@ def main():
                 if skipped_count > 0:
                     print(f"Skipping {skipped_count} already completed repository(ies)")
             
+            # Get org-specific token
+            org_token = get_token_for_org(org_name, token_map, installation_token)
+            
             # Process repos for this org
             for repo in repos_to_scan:
-                scan_repository(repo, org_name, reports_dir, scan_date, current_repo, installation_token, tokens_to_sanitize, scan_state)
+                scan_repository(repo, org_name, reports_dir, scan_date, current_repo, org_token, tokens_to_sanitize, scan_state)
             
             # Print summary if state management is available
             if scan_state:
@@ -445,8 +466,11 @@ def main():
             if skipped_count > 0:
                 print(f"Skipping {skipped_count} already completed repository(ies)")
         
+        # Get org-specific token (for single org mode, use default token)
+        org_token = get_token_for_org(org_name, token_map, installation_token)
+        
         for repo in repos_to_scan:
-            scan_repository(repo, org_name, reports_dir, scan_date, current_repo, installation_token, tokens_to_sanitize, scan_state)
+            scan_repository(repo, org_name, reports_dir, scan_date, current_repo, org_token, tokens_to_sanitize, scan_state)
         
         # Print summary if state management is available
         if scan_state:

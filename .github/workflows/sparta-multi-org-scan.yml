@@ -33,29 +33,160 @@ jobs:
       needs-batching: ${{ steps.detect-batching.outputs.needs_batching }}
       matrix: ${{ steps.batch-repos.outputs.matrix }}
       total-batches: ${{ steps.batch-repos.outputs.total_batches }}
+      token-map: ${{ steps.generate-org-tokens.outputs.token_map }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate GitHub App token
-        id: generate-token
+      - name: Parse organizations
+        id: parse-orgs
+        run: |
+          ORGS="${{ inputs.github-orgs || github.event.inputs.github-orgs || github.repository_owner }}"
+          echo "orgs=$ORGS" >> $GITHUB_OUTPUT
+          # Create JSON array for matrix strategy
+          IFS=',' read -ra ORG_ARRAY <<< "$ORGS"
+          ORG_JSON="["
+          for i in "${!ORG_ARRAY[@]}"; do
+            if [ $i -gt 0 ]; then
+              ORG_JSON+=","
+            fi
+            ORG_JSON+="{\"org\":\"${ORG_ARRAY[i]// /}\"}"
+          done
+          ORG_JSON+="]"
+          echo "orgs_json=$ORG_JSON" >> $GITHUB_OUTPUT
+
+      - name: Generate GitHub App token (default for repository owner)
+        id: generate-base-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.SPARTA_APP_ID }}
           private-key: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: Mask token and set environment
-        id: mask-token
-        env:
-          GENERATED_TOKEN: ${{ steps.generate-token.outputs.token }}
+      - name: Mask base token
         run: |
-          if [ -z "$GENERATED_TOKEN" ]; then
-            echo "GitHub App token generation failed" >&2
-            exit 1
-          fi
-          echo "::add-mask::$GENERATED_TOKEN"
-          echo "GITHUB_APP_TOKEN=$GENERATED_TOKEN" >> $GITHUB_ENV
+          echo "::add-mask::${{ steps.generate-base-token.outputs.token }}"
+          echo "GITHUB_APP_TOKEN=${{ steps.generate-base-token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Install Python dependencies for token generation
+        run: |
+          pip install --quiet PyJWT cryptography requests
+
+      - name: Generate per-org tokens using GitHub API
+        id: generate-org-tokens
+        env:
+          ORGS: ${{ steps.parse-orgs.outputs.orgs }}
+          APP_ID: ${{ secrets.SPARTA_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          import time
+          import jwt
+          import requests
+          from datetime import datetime, timedelta
+          
+          def generate_jwt(app_id, private_key):
+              """Generate JWT for GitHub App authentication."""
+              now = datetime.utcnow()
+              payload = {
+                  'iat': now - timedelta(seconds=60),
+                  'exp': now + timedelta(minutes=10),
+                  'iss': app_id
+              }
+              return jwt.encode(payload, private_key, algorithm='RS256')
+          
+          def get_installation_token(jwt_token, org_name):
+              """Get installation access token for an organization."""
+              # First, find the installation ID for this org
+              headers = {
+                  'Authorization': f'Bearer {jwt_token}',
+                  'Accept': 'application/vnd.github.v3+json'
+              }
+              
+              # Try to get installation for this org
+              response = requests.get(
+                  f'https://api.github.com/orgs/{org_name}/installation',
+                  headers=headers,
+                  timeout=10
+              )
+              
+              if response.status_code == 404:
+                  return None, f"GitHub App not installed on {org_name}"
+              elif response.status_code != 200:
+                  return None, f"Error checking installation: {response.status_code}"
+              
+              installation_id = response.json()['id']
+              
+              # Generate installation access token
+              response = requests.post(
+                  f'https://api.github.com/app/installations/{installation_id}/access_tokens',
+                  headers=headers,
+                  timeout=10
+              )
+              
+              if response.status_code != 201:
+                  return None, f"Error generating token: {response.status_code}"
+              
+              return response.json()['token'], None
+          
+          orgs_str = os.environ.get('ORGS', '')
+          app_id = os.environ.get('APP_ID', '')
+          private_key = os.environ.get('APP_PRIVATE_KEY', '')
+          
+          if not orgs_str or not app_id or not private_key:
+              print("Error: Missing required environment variables")
+              exit(1)
+          
+          orgs = [org.strip() for org in orgs_str.split(',') if org.strip()]
+          token_map = {}
+          failed_orgs = []
+          
+          # Generate JWT once
+          try:
+              jwt_token = generate_jwt(app_id, private_key)
+          except Exception as e:
+              print(f"Error generating JWT: {e}")
+              exit(1)
+          
+          # Generate token for each org
+          for org in orgs:
+              try:
+                  token, error = get_installation_token(jwt_token, org)
+                  if token:
+                      token_map[org] = token
+                      print(f"✓ Token generated for {org}")
+                      # Mask the token
+                      print(f"::add-mask::{token}")
+                  else:
+                      print(f"⚠ Warning: {error}")
+                      failed_orgs.append(org)
+              except Exception as e:
+                  print(f"⚠ Warning: Failed to generate token for {org}: {e}")
+                  failed_orgs.append(org)
+          
+          # If no tokens generated, use base token as fallback
+          if not token_map:
+              print("Warning: No org-specific tokens generated, using base token for all orgs")
+              base_token = os.environ.get('BASE_TOKEN', '')
+              if base_token:
+                  for org in orgs:
+                      token_map[org] = base_token
+          
+          # Save token map as JSON
+          token_map_json = json.dumps(token_map)
+          github_output = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
+          with open(github_output, 'a') as f:
+              f.write(f"token_map={token_map_json}\n")
+              f.write(f"failed_orgs={json.dumps(failed_orgs)}\n")
+          
+          if failed_orgs:
+              print(f"\n⚠ Warning: Failed to generate tokens for: {', '.join(failed_orgs)}")
+              print("  Make sure the GitHub App is installed on these organizations")
+          EOF
+        env:
+          BASE_TOKEN: ${{ steps.generate-base-token.outputs.token }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -67,7 +198,8 @@ jobs:
       - name: Get all organization repositories
         id: get-repos
         env:
-          GITHUB_ORGS: ${{ inputs.github-orgs || github.event.inputs.github-orgs || github.repository_owner }}
+          GITHUB_ORGS: ${{ steps.parse-orgs.outputs.orgs }}
+          GITHUB_APP_TOKEN_MAP: ${{ steps.generate-org-tokens.outputs.token_map }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
         run: |
           docker run --rm \
@@ -76,6 +208,7 @@ jobs:
             -v "${{ github.output }}":/github_output \
             -w /workspace \
             -e GITHUB_ORGS \
+            -e GITHUB_APP_TOKEN_MAP \
             -e GITHUB_APP_TOKEN \
             -e GITHUB_OUTPUT=/github_output \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
@@ -254,6 +387,7 @@ jobs:
           GITHUB_ORG: ${{ steps.extract-batch.outputs.org }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          GITHUB_APP_TOKEN_MAP: ${{ needs.get-repos.outputs.token-map }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
           BATCH_SIZE: ${{ env.BATCH_SIZE }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
@@ -265,6 +399,7 @@ jobs:
             -e GITHUB_ORG \
             -e GITHUB_REPOSITORY \
             -e GITHUB_APP_TOKEN \
+            -e GITHUB_APP_TOKEN_MAP \
             -e GITHUB_WORKSPACE=/workspace \
             -e BATCH_SIZE \
             -e MAX_RETRIES \
@@ -332,6 +467,7 @@ jobs:
           GITHUB_ORGS: ${{ inputs.github-orgs || github.event.inputs.github-orgs || github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          GITHUB_APP_TOKEN_MAP: ${{ needs.get-repos.outputs.token-map }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
         run: |
@@ -342,6 +478,7 @@ jobs:
             -e GITHUB_ORGS \
             -e GITHUB_REPOSITORY \
             -e GITHUB_APP_TOKEN \
+            -e GITHUB_APP_TOKEN_MAP \
             -e GITHUB_WORKSPACE=/workspace \
             -e MAX_RETRIES \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \

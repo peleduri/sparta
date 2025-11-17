@@ -45,6 +45,30 @@ Sparta supports scanning multiple GitHub organizations in a single workflow run,
 - `BATCH_SIZE`: Number of repositories per batch (default: 100)
 - `MAX_RETRIES`: Maximum retry attempts for failed repos (default: 3)
 
+### GitHub App Setup for Multi-Org
+
+**Important**: To scan multiple organizations, the GitHub App must be installed on **all target organizations**.
+
+1. **Install the App on All Organizations**:
+   - Go to each organization's settings → GitHub Apps → Installed GitHub Apps
+   - Find your Sparta app and ensure it's installed
+   - Or install it via: Organization Settings → GitHub Apps → Install App → Select your organization
+
+2. **Token Generation**:
+   - The workflow automatically generates installation access tokens for each organization
+   - Tokens are generated using the GitHub API with JWT authentication
+   - Each organization gets its own token, scoped to that organization's installation
+
+3. **Token Map**:
+   - Tokens are stored in a JSON map: `{"org1": "token1", "org2": "token2"}`
+   - The map is passed to scripts via `GITHUB_APP_TOKEN_MAP` environment variable
+   - Scripts automatically select the appropriate token for each organization
+
+4. **Error Handling**:
+   - If token generation fails for an organization, that org is skipped
+   - A warning is logged indicating the app may not be installed on that org
+   - Other organizations continue to be scanned
+
 ### Workflow Inputs
 
 The `sparta-multi-org-scan.yml` workflow accepts:
@@ -207,6 +231,23 @@ Failed repositories generate error reports:
 - Verify GitHub App has access to all specified organizations
 - Check that `GITHUB_ORGS` contains valid organization names
 - Ensure GitHub App has required permissions (Contents: Read, Metadata: Read)
+- Verify the GitHub App is installed on all target organizations
+
+### Token Generation Fails for Some Organizations
+
+- **Symptom**: Warning messages like "GitHub App not installed on {org-name}"
+- **Solution**: 
+  1. Go to the organization's settings
+  2. Navigate to GitHub Apps → Installed GitHub Apps
+  3. Install the Sparta GitHub App on that organization
+  4. Ensure it's installed on "All repositories" (not just selected repos)
+  5. Re-run the workflow
+
+### Some Organizations Not Scanned
+
+- Check workflow logs for token generation errors
+- Verify each organization in `GITHUB_ORGS` has the app installed
+- Review the "Generate per-org tokens" step output for specific errors
 
 ### Batching Not Working
 

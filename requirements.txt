@@ -13,3 +13,8 @@ PyGithub==2.8.1
 # Testing framework
 pytest==8.3.4
 
+# JWT library for GitHub App token generation
+# https://github.com/jpadilla/pyjwt/releases
+PyJWT==2.9.0
+cryptography==43.0.3
+

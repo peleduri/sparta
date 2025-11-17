@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from github import Github
 from github.Auth import Token
+from typing import Dict, Optional
 
 # Import security utilities
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,15 +45,33 @@ def get_org_repos(org_name, g, tokens_to_sanitize):
         print(f"Error fetching repositories for {org_name}: {error_msg}")
         raise
 
+def get_token_for_org(org_name, token_map, default_token):
+    """Get the appropriate token for an organization from the token map."""
+    if token_map:
+        return token_map.get(org_name, default_token)
+    return default_token
+
 def main():
     # Validate and sanitize inputs
     installation_token = os.environ.get('GITHUB_APP_TOKEN', '')
+    token_map_json = os.environ.get('GITHUB_APP_TOKEN_MAP', '')
+    
+    # Parse token map if provided
+    token_map = {}
+    if token_map_json:
+        try:
+            token_map = json.loads(token_map_json)
+            # Add all tokens to sanitize list
+            tokens_to_sanitize = list(token_map.values()) + [installation_token]
+        except json.JSONDecodeError:
+            print("Warning: Failed to parse GITHUB_APP_TOKEN_MAP, using default token")
+            tokens_to_sanitize = [installation_token]
+    else:
+        tokens_to_sanitize = [installation_token]
+    
     if not installation_token:
         print("Error: GITHUB_APP_TOKEN environment variable is not set")
         sys.exit(1)
-    
-    # Tokens to sanitize in error messages
-    tokens_to_sanitize = [installation_token]
     
     # Check for GITHUB_ORGS (multi-org) or GITHUB_ORG (single org, backward compatible)
     orgs_env = os.environ.get('GITHUB_ORGS', '').strip()
@@ -74,26 +93,45 @@ def main():
         sys.exit(1)
     
     try:
-        # Use installation token to access organizations via PyGithub
-        token_auth = Token(installation_token)
-        g = Github(auth=token_auth)
-        
         if use_multi_org_format:
             # Multi-org format: array of org objects
             org_repos_list = []
             total_repos = 0
+            failed_orgs = []
             
             for org_name in org_names:
-                print(f"Fetching repositories for organization: {org_name}")
-                repos = get_org_repos(org_name, g, tokens_to_sanitize)
-                org_repos_list.append({
-                    'org': org_name,
-                    'repos': repos
-                })
-                total_repos += len(repos)
-                print(f"Found {len(repos)} repositories in {org_name}")
+                # Get token for this org
+                org_token = get_token_for_org(org_name, token_map, installation_token)
+                
+                try:
+                    # Create GitHub client with org-specific token
+                    token_auth = Token(org_token)
+                    g = Github(auth=token_auth)
+                    
+                    print(f"Fetching repositories for organization: {org_name}")
+                    repos = get_org_repos(org_name, g, tokens_to_sanitize)
+                    org_repos_list.append({
+                        'org': org_name,
+                        'repos': repos
+                    })
+                    total_repos += len(repos)
+                    print(f"Found {len(repos)} repositories in {org_name}")
+                except Exception as e:
+                    error_msg = sanitize_error_message(str(e), tokens_to_sanitize)
+                    print(f"✗ Error fetching repositories for {org_name}: {error_msg}")
+                    print(f"  This may indicate the GitHub App is not installed on {org_name}")
+                    failed_orgs.append(org_name)
+                    continue
             
-            print(f"Total: {total_repos} repositories across {len(org_names)} organization(s)")
+            if failed_orgs:
+                print(f"\n⚠ Warning: Failed to fetch repositories for {len(failed_orgs)} organization(s): {', '.join(failed_orgs)}")
+                print(f"  Make sure the GitHub App is installed on these organizations")
+            
+            if not org_repos_list:
+                print("Error: Failed to fetch repositories for any organization")
+                sys.exit(1)
+            
+            print(f"\nTotal: {total_repos} repositories across {len(org_repos_list)} organization(s)")
             
             # Save repos list to file (validate path)
             base_dir = Path.cwd()
@@ -105,10 +143,13 @@ def main():
             github_output = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
             with open(github_output, 'a') as f:
                 f.write(f"count={total_repos}\n")
-                f.write(f"orgs={len(org_names)}\n")
+                f.write(f"orgs={len(org_repos_list)}\n")
         else:
             # Single org format: backward compatible (array of repos)
             org_name = org_names[0]
+            # Use default token for single org mode
+            token_auth = Token(installation_token)
+            g = Github(auth=token_auth)
             repos = get_org_repos(org_name, g, tokens_to_sanitize)
             
             print(f"Found {len(repos)} repositories")

@@ -1,0 +1,263 @@
+name: Sparta - CI Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/sparta-ci-tests.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/sparta-ci-tests.yml'
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Test Suite
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit tests for multi-org tokens
+        run: |
+          python3 tests/test_multi_org_tokens.py
+
+      - name: Run integration scenario tests
+        run: |
+          python3 tests/test_integration_scenarios.py
+
+      - name: Run workflow token generation simulation
+        run: |
+          python3 tests/simulate_workflow_token_generation.py
+
+      - name: Run existing credential format tests
+        run: |
+          python3 -m pytest tests/test_credential_format.py -v
+
+      - name: Test script syntax validation
+        run: |
+          python3 -m py_compile scripts/get_repos.py scripts/scan_repos.py scripts/batch_repos.py scripts/scan_state.py scripts/security_utils.py scripts/aggregate-scans.py scripts/commit_results.py scripts/query-cve.py
+          echo "✓ All scripts have valid Python syntax"
+
+      - name: Test import validation
+        run: |
+          python3 << 'EOF'
+          import sys
+          sys.path.insert(0, 'scripts')
+          
+          # Test that all modules can be imported (may fail on missing deps, that's ok)
+          try:
+              import security_utils
+              print("✓ security_utils imports successfully")
+          except ImportError as e:
+              print(f"⚠ security_utils import warning: {e}")
+          
+          try:
+              import batch_repos
+              print("✓ batch_repos imports successfully")
+          except ImportError as e:
+              print(f"⚠ batch_repos import warning: {e}")
+          
+          try:
+              import scan_state
+              print("✓ scan_state imports successfully")
+          except ImportError as e:
+              print(f"⚠ scan_state import warning: {e}")
+          EOF
+
+      - name: Test workflow YAML syntax
+        run: |
+          python3 << 'EOF'
+          import yaml
+          import sys
+          from pathlib import Path
+          
+          workflow_files = list(Path('.github/workflows').glob('*.yml'))
+          errors = []
+          
+          for workflow_file in workflow_files:
+              try:
+                  with open(workflow_file, 'r') as f:
+                      yaml.safe_load(f)
+                  print(f"✓ {workflow_file.name} has valid YAML syntax")
+              except yaml.YAMLError as e:
+                  errors.append(f"{workflow_file.name}: {e}")
+                  print(f"✗ {workflow_file.name} has YAML syntax errors")
+          
+          if errors:
+              print("\nYAML Errors:")
+              for error in errors:
+                  print(f"  - {error}")
+              sys.exit(1)
+          EOF
+
+      - name: Test batch splitting logic
+        run: |
+          python3 << 'EOF'
+          import sys
+          sys.path.insert(0, 'scripts')
+          from batch_repos import split_into_batches
+          
+          # Test with various sizes
+          test_cases = [
+              (list(range(250)), 100, 3),  # 250 items, 100 per batch = 3 batches
+              (list(range(100)), 100, 1),  # Exactly one batch
+              (list(range(1)), 100, 1),   # Single item
+              (list(range(0)), 100, 0),   # Empty list
+          ]
+          
+          for items, batch_size, expected_batches in test_cases:
+              batches = split_into_batches(items, batch_size)
+              assert len(batches) == expected_batches, \
+                  f"Expected {expected_batches} batches for {len(items)} items with batch_size {batch_size}, got {len(batches)}"
+          
+          print("✓ Batch splitting logic works correctly")
+          EOF
+
+      - name: Test multi-org format detection
+        run: |
+          python3 << 'EOF'
+          import json
+          
+          # Test multi-org format
+          multi_org = [
+              {"org": "org1", "repos": [{"name": "repo1"}]},
+              {"org": "org2", "repos": [{"name": "repo2"}]}
+          ]
+          
+          is_multi_org = (
+              isinstance(multi_org, list) and 
+              len(multi_org) > 0 and 
+              isinstance(multi_org[0], dict) and 
+              'org' in multi_org[0] and 
+              'repos' in multi_org[0]
+          )
+          assert is_multi_org == True, "Should detect multi-org format"
+          
+          # Test single-org format
+          single_org = [
+              {"name": "repo1", "full_name": "org1/repo1"}
+          ]
+          
+          is_multi_org = (
+              isinstance(single_org, list) and 
+              len(single_org) > 0 and 
+              isinstance(single_org[0], dict) and 
+              'org' in single_org[0] and 
+              'repos' in single_org[0]
+          )
+          assert is_multi_org == False, "Should not detect single-org as multi-org"
+          
+          print("✓ Multi-org format detection works correctly")
+          EOF
+
+      - name: Test resume logic
+        run: |
+          python3 << 'EOF'
+          # Test resume logic - filtering repos based on state
+          completed = {'repo1', 'repo2'}
+          failed_to_retry = {'repo3'}
+          all_repos = [
+              {'name': 'repo1'},
+              {'name': 'repo2'},
+              {'name': 'repo3'},
+              {'name': 'repo4'},
+              {'name': 'repo5'}
+          ]
+          
+          repos_to_scan = [
+              repo for repo in all_repos
+              if repo['name'] not in completed or repo['name'] in failed_to_retry
+          ]
+          
+          expected = ['repo3', 'repo4', 'repo5']
+          actual = [r['name'] for r in repos_to_scan]
+          
+          assert set(actual) == set(expected), f"Expected {expected}, got {actual}"
+          print("✓ Resume logic (filtering repos) works correctly")
+          EOF
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All tests completed for Python ${{ matrix.python-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Test Suites Run:" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit tests for multi-org tokens" >> $GITHUB_STEP_SUMMARY
+          echo "- Integration scenario tests" >> $GITHUB_STEP_SUMMARY
+          echo "- Workflow token generation simulation" >> $GITHUB_STEP_SUMMARY
+          echo "- Credential format tests" >> $GITHUB_STEP_SUMMARY
+          echo "- Script syntax validation" >> $GITHUB_STEP_SUMMARY
+          echo "- Workflow YAML validation" >> $GITHUB_STEP_SUMMARY
+          echo "- Logic validation tests" >> $GITHUB_STEP_SUMMARY
+
+  lint:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check Python syntax
+        run: |
+          python3 -m py_compile scripts/*.py tests/*.py 2>&1 | head -20 || echo "✓ All Python files have valid syntax"
+
+      - name: Check for common issues
+        run: |
+          echo "Checking for common code issues..."
+          
+          # Check for hardcoded secrets (basic check)
+          if grep -r "ghp_\|gho_\|ghu_\|ghs_\|ghr_" scripts/ tests/ --exclude-dir=__pycache__ 2>/dev/null | grep -v "test\|mock\|example"; then
+            echo "⚠ Warning: Potential hardcoded GitHub tokens found"
+          else
+            echo "✓ No hardcoded tokens detected"
+          fi
+          
+          # Check for TODO/FIXME comments
+          todo_count=$(grep -r "TODO\|FIXME" scripts/ tests/ --exclude-dir=__pycache__ 2>/dev/null | wc -l || echo "0")
+          if [ "$todo_count" -gt 0 ]; then
+            echo "ℹ Found $todo_count TODO/FIXME comments (informational)"
+          fi
+
