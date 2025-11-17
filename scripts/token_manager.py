@@ -69,24 +69,113 @@ def get_installation_token(jwt_token: str, org_name: str) -> Tuple[Optional[str]
         return None, f"Unexpected error: {str(e)}"
 
 
+def generate_tokens_for_orgs_with_credentials(
+    orgs: List[str],
+    org_credentials_map: Dict[str, Dict[str, str]],
+    default_app_id: str,
+    default_private_key: str,
+    fallback_token: Optional[str] = None
+) -> Dict[str, str]:
+    """
+    Generate installation access tokens for multiple organizations using per-org credentials.
+    
+    Args:
+        orgs: List of organization names
+        org_credentials_map: Dictionary mapping org names to credentials:
+            {"org1": {"app_id": "...", "private_key": "..."}, ...}
+        default_app_id: Default GitHub App ID (used if org not in credentials map)
+        default_private_key: Default GitHub App private key (used if org not in credentials map)
+        fallback_token: Optional fallback token to use if org-specific token generation fails
+    
+    Returns:
+        Dictionary mapping org names to tokens: {"org1": "token1", "org2": "token2"}
+    """
+    token_map = {}
+    failed_orgs = []
+    jwt_cache = {}  # Cache JWTs per app_id to avoid regenerating
+    
+    # Generate token for each org
+    for org in orgs:
+        org = org.strip()
+        if not org:
+            continue
+        
+        # Get credentials for this org (fallback to default)
+        org_creds = org_credentials_map.get(org, {})
+        app_id = org_creds.get('app_id', default_app_id)
+        private_key = org_creds.get('private_key', default_private_key)
+        
+        # Generate or retrieve JWT for this app_id
+        if app_id not in jwt_cache:
+            try:
+                jwt_token = generate_jwt(app_id, private_key)
+                jwt_cache[app_id] = jwt_token
+            except Exception as e:
+                print(f"Error generating JWT for {org} (app_id: {app_id[:8]}...): {e}")
+                if fallback_token:
+                    token_map[org] = fallback_token
+                    print(f"  Using fallback token for {org}")
+                else:
+                    failed_orgs.append(org)
+                continue
+        else:
+            jwt_token = jwt_cache[app_id]
+        
+        # Generate installation token
+        token, error = get_installation_token(jwt_token, org)
+        if token:
+            token_map[org] = token
+            cred_source = "org-specific" if org in org_credentials_map else "default"
+            print(f"✓ Token generated for {org} (using {cred_source} credentials)")
+        else:
+            print(f"⚠ Warning: {error}")
+            failed_orgs.append(org)
+            # Use fallback token if available
+            if fallback_token:
+                token_map[org] = fallback_token
+                print(f"  Using fallback token for {org}")
+    
+    # If no tokens generated and we have a fallback, use it for all
+    if not token_map and fallback_token:
+        print("Warning: No org-specific tokens generated, using fallback token for all orgs")
+        token_map = {org: fallback_token for org in orgs}
+    
+    if failed_orgs:
+        print(f"\n⚠ Warning: Failed to generate tokens for: {', '.join(failed_orgs)}")
+        print("  Make sure the GitHub App is installed on these organizations")
+    
+    return token_map
+
+
 def generate_tokens_for_orgs(
     orgs: List[str],
     app_id: str,
     private_key: str,
-    fallback_token: Optional[str] = None
+    fallback_token: Optional[str] = None,
+    org_credentials_map: Optional[Dict[str, Dict[str, str]]] = None
 ) -> Dict[str, str]:
     """
     Generate installation access tokens for multiple organizations.
     
     Args:
         orgs: List of organization names
-        app_id: GitHub App ID
-        private_key: GitHub App private key (PEM format)
+        app_id: GitHub App ID (default, used if org not in org_credentials_map)
+        private_key: GitHub App private key (default, used if org not in org_credentials_map)
         fallback_token: Optional fallback token to use if org-specific token generation fails
+        org_credentials_map: Optional dictionary mapping org names to credentials:
+            {"org1": {"app_id": "...", "private_key": "..."}, ...}
+            If provided, uses per-org credentials; otherwise uses default app_id/private_key for all
     
     Returns:
         Dictionary mapping org names to tokens: {"org1": "token1", "org2": "token2"}
     """
+    # If per-org credentials provided, use the new function
+    if org_credentials_map:
+        return generate_tokens_for_orgs_with_credentials(
+            orgs, org_credentials_map, app_id, private_key, fallback_token
+        )
+    
+    # Otherwise, use original single-credential logic
     token_map = {}
     failed_orgs = []
     

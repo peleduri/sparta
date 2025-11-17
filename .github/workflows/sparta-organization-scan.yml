@@ -45,6 +45,17 @@ jobs:
           echo "::add-mask::${{ steps.generate-base-token.outputs.token }}"
           echo "GITHUB_APP_TOKEN=${{ steps.generate-base-token.outputs.token }}" >> $GITHUB_ENV
 
+      - name: Parse organizations and set per-org credentials
+        id: parse-orgs
+        run: |
+          ORGS_INPUT="${{ inputs.github-orgs || github.repository_owner }}"
+          ORGS=$(echo "$ORGS_INPUT" | tr ',' '\n' | tr -d ' ' | tr '\n' ',' | sed 's/,$//')
+          echo "orgs=$ORGS" >> $GITHUB_OUTPUT
+          
+          # Normalize org names for secret lookup (uppercase, replace - with _)
+          ORGS_NORMALIZED=$(echo "$ORGS" | tr ',' '\n' | awk '{print toupper($0)}' | sed 's/-/_/g' | tr '\n' ',' | sed 's/,$//')
+          echo "orgs_normalized=$ORGS_NORMALIZED" >> $GITHUB_OUTPUT
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -61,6 +72,13 @@ jobs:
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
           BATCH_SIZE: ${{ env.BATCH_SIZE }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
+          # Per-org credentials (if secrets exist, they will be passed; otherwise empty)
+          # Note: GitHub Actions doesn't support dynamic secret access, so per-org secrets
+          # must be explicitly referenced here. For multi-org with per-org credentials,
+          # add lines like:
+          # SPARTA_APP_ID_ORG1: ${{ secrets.SPARTA_APP_ID_ORG1 }}
+          # SPARTA_APP_PRIVATE_KEY_ORG1: ${{ secrets.SPARTA_APP_PRIVATE_KEY_ORG1 }}
+          # Replace ORG1 with the normalized org name (uppercase, underscores)
         run: |
           docker run --rm \
             --user $(id -u):$(id -g) \
@@ -73,6 +91,7 @@ jobs:
             -e GITHUB_APP_TOKEN \
             -e BATCH_SIZE \
             -e MAX_RETRIES \
+            $(env | grep '^SPARTA_APP_' | sed 's/^/-e /' | tr '\n' ' ') \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
             orchestrate-scan \
             --orgs "${{ inputs.github-orgs || github.repository_owner }}" \

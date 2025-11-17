@@ -84,13 +84,79 @@ def needs_batching(repos_file: Path, threshold: int = 500) -> bool:
         return False
 
 
-def generate_tokens(orgs: List[str], app_id: str, private_key: str, fallback_token: Optional[str] = None) -> Dict[str, str]:
+def normalize_org_name_for_secret(org_name: str) -> str:
+    """
+    Normalize organization name for use in secret names.
+    
+    Converts org name to uppercase and replaces hyphens with underscores.
+    Example: "my-org" -> "MY_ORG"
+    """
+    return org_name.upper().replace('-', '_')
+
+
+def parse_org_credentials(orgs: List[str], default_app_id: str, default_private_key: str) -> Dict[str, Dict[str, str]]:
+    """
+    Parse per-organization GitHub App credentials from environment variables.
+    
+    Looks for secrets in format: SPARTA_APP_ID_<ORG> and SPARTA_APP_PRIVATE_KEY_<ORG>
+    Falls back to default credentials if org-specific not found.
+    
+    Args:
+        orgs: List of organization names
+        default_app_id: Default GitHub App ID
+        default_private_key: Default GitHub App private key
+    
+    Returns:
+        Dictionary mapping org names to credentials:
+        {"org1": {"app_id": "...", "private_key": "..."}, ...}
+    """
+    org_credentials_map = {}
+    
+    for org in orgs:
+        org_normalized = normalize_org_name_for_secret(org)
+        
+        # Look for org-specific credentials
+        org_app_id_key = f"SPARTA_APP_ID_{org_normalized}"
+        org_private_key_key = f"SPARTA_APP_PRIVATE_KEY_{org_normalized}"
+        
+        org_app_id = os.environ.get(org_app_id_key, '').strip()
+        org_private_key = os.environ.get(org_private_key_key, '').strip()
+        
+        # If both org-specific credentials found, use them
+        if org_app_id and org_private_key:
+            org_credentials_map[org] = {
+                'app_id': org_app_id,
+                'private_key': org_private_key
+            }
+            print(f"✓ Found org-specific credentials for {org}")
+        # Otherwise, will use default credentials (no entry in map)
+    
+    return org_credentials_map
+
+
+def generate_tokens(
+    orgs: List[str],
+    app_id: str,
+    private_key: str,
+    fallback_token: Optional[str] = None,
+    org_credentials_map: Optional[Dict[str, Dict[str, str]]] = None
+) -> Dict[str, str]:
     """Generate tokens for organizations."""
     print(f"\n{'='*60}")
     print("Generating GitHub App tokens")
     print(f"{'='*60}")
     
-    token_map = generate_tokens_for_orgs(orgs, app_id, private_key, fallback_token)
+    if org_credentials_map:
+        orgs_with_custom = [org for org in orgs if org in org_credentials_map]
+        orgs_with_default = [org for org in orgs if org not in org_credentials_map]
+        if orgs_with_custom:
+            print(f"Using org-specific credentials for: {', '.join(orgs_with_custom)}")
+        if orgs_with_default:
+            print(f"Using default credentials for: {', '.join(orgs_with_default)}")
+    
+    token_map = generate_tokens_for_orgs(
+        orgs, app_id, private_key, fallback_token, org_credentials_map
+    )
     
     if not token_map:
         raise RuntimeError("Failed to generate tokens for any organization")
@@ -131,7 +197,7 @@ def main():
     print(f"Max retries: {args.max_retries}")
     print(f"{'='*60}\n")
     
-    # Get GitHub App credentials
+    # Get default GitHub App credentials
     app_id = args.app_id or os.environ.get('SPARTA_APP_ID', '')
     private_key = args.app_private_key or os.environ.get('SPARTA_APP_PRIVATE_KEY', '')
     
@@ -139,14 +205,18 @@ def main():
         print("Error: GitHub App credentials not provided")
         print("  Set SPARTA_APP_ID and SPARTA_APP_PRIVATE_KEY environment variables")
         print("  Or provide --app-id and --app-private-key arguments")
+        print("  For per-org credentials, use SPARTA_APP_ID_<ORG> and SPARTA_APP_PRIVATE_KEY_<ORG>")
         sys.exit(1)
+    
+    # Parse per-org credentials from environment
+    org_credentials_map = parse_org_credentials(orgs, app_id, private_key)
     
     # Generate base token for repository owner (fallback)
     fallback_token = os.environ.get('GITHUB_APP_TOKEN', '')
     
     # Generate tokens for all orgs
     try:
-        token_map = generate_tokens(orgs, app_id, private_key, fallback_token)
+        token_map = generate_tokens(orgs, app_id, private_key, fallback_token, org_credentials_map)
     except Exception as e:
         print(f"Error generating tokens: {e}")
         sys.exit(1)

@@ -43,8 +43,13 @@ echo "7. Running workflow token generation simulation..."
 python3 tests/simulate_workflow_token_generation.py
 echo ""
 
-# Test 8: Credential format tests
-echo "8. Running credential format tests..."
+# Test 8: Per-org credentials tests
+echo "8. Running per-org credentials tests..."
+python3 tests/test_per_org_credentials.py
+echo ""
+
+# Test 9: Credential format tests
+echo "9. Running credential format tests..."
 python3 -m pytest tests/test_credential_format.py -v 2>&1 | head -30 || echo "⚠ Pytest not available, skipping"
 echo ""
 

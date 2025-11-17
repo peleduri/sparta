@@ -69,6 +69,71 @@ Sparta supports scanning multiple GitHub organizations in a single workflow run,
    - A warning is logged indicating the app may not be installed on that org
    - Other organizations continue to be scanned
 
+### Per-Organization GitHub App Credentials
+
+Sparta supports using different GitHub App credentials for different organizations. This is useful when:
+- Different organizations have different GitHub Apps installed
+- You want better security isolation between organizations
+- You need different app permissions per organization
+
+#### Secret Naming Convention
+
+- **Default credentials** (used for all orgs if per-org not specified):
+  - `SPARTA_APP_ID`: Default GitHub App ID
+  - `SPARTA_APP_PRIVATE_KEY`: Default GitHub App private key
+
+- **Per-organization credentials**:
+  - `SPARTA_APP_ID_<ORG_NAME>`: GitHub App ID for specific organization
+  - `SPARTA_APP_PRIVATE_KEY_<ORG_NAME>`: GitHub App private key for specific organization
+
+**Org name normalization**: Organization names are normalized for secret names:
+- Converted to uppercase
+- Hyphens (`-`) replaced with underscores (`_`)
+
+**Examples**:
+- Organization `my-org` → Secrets: `SPARTA_APP_ID_MY_ORG`, `SPARTA_APP_PRIVATE_KEY_MY_ORG`
+- Organization `acme-corp` → Secrets: `SPARTA_APP_ID_ACME_CORP`, `SPARTA_APP_PRIVATE_KEY_ACME_CORP`
+
+#### Configuration
+
+1. **Set default credentials** (required):
+   - `SPARTA_APP_ID`: Your default GitHub App ID
+   - `SPARTA_APP_PRIVATE_KEY`: Your default GitHub App private key
+
+2. **Set per-org credentials** (optional):
+   - For each organization that needs its own credentials, create secrets:
+     - `SPARTA_APP_ID_<NORMALIZED_ORG_NAME>`
+     - `SPARTA_APP_PRIVATE_KEY_<NORMALIZED_ORG_NAME>`
+
+3. **Update workflow** (if using per-org credentials):
+   - In `.github/workflows/sparta-organization-scan.yml`, add per-org secrets to the `env` section:
+   ```yaml
+   env:
+     SPARTA_APP_ID: ${{ secrets.SPARTA_APP_ID }}
+     SPARTA_APP_PRIVATE_KEY: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+     # Per-org credentials (add for each org that needs them)
+     SPARTA_APP_ID_MY_ORG: ${{ secrets.SPARTA_APP_ID_MY_ORG }}
+     SPARTA_APP_PRIVATE_KEY_MY_ORG: ${{ secrets.SPARTA_APP_PRIVATE_KEY_MY_ORG }}
+     SPARTA_APP_ID_ACME_CORP: ${{ secrets.SPARTA_APP_ID_ACME_CORP }}
+     SPARTA_APP_PRIVATE_KEY_ACME_CORP: ${{ secrets.SPARTA_APP_PRIVATE_KEY_ACME_CORP }}
+   ```
+
+#### How It Works
+
+1. The orchestration script (`orchestrate_scan.py`) parses per-org credentials from environment variables
+2. For each organization:
+   - If per-org credentials exist → uses those
+   - Otherwise → falls back to default credentials
+3. Token generation uses the appropriate credentials for each organization
+4. Logs indicate which credentials are used (without exposing secrets)
+
+#### Benefits
+
+- **Security**: Isolated credentials per organization
+- **Flexibility**: Different apps with different permissions
+- **Operational**: Easier credential rotation per organization
+- **Backward Compatible**: Works with default credentials if per-org not specified
+
 ### Workflow Inputs
 
 The `sparta-multi-org-scan.yml` workflow accepts:

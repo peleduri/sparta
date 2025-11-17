@@ -586,6 +586,20 @@ Before using the workflows, you must configure these secrets in your repository 
 - `SPARTA_APP_ID`: GitHub App ID (for daily organization scan)
 - `SPARTA_APP_PRIVATE_KEY`: GitHub App private key (for daily organization scan)
 
+**Per-Organization Credentials (Optional)**:
+
+For multi-organization scanning, you can optionally use different GitHub App credentials per organization:
+
+- `SPARTA_APP_ID_<ORG_NAME>`: GitHub App ID for specific organization
+- `SPARTA_APP_PRIVATE_KEY_<ORG_NAME>`: GitHub App private key for specific organization
+
+**Org name normalization**: Organization names are normalized (uppercase, hyphens → underscores).
+Example: For organization `my-org`, use secrets `SPARTA_APP_ID_MY_ORG` and `SPARTA_APP_PRIVATE_KEY_MY_ORG`.
+
+If per-org credentials are not provided, the default `SPARTA_APP_ID` and `SPARTA_APP_PRIVATE_KEY` will be used for all organizations.
+
+See [Multi-Organization Scanning Documentation](docs/MULTI_ORG_SCANNING.md#per-organization-github-app-credentials) for details.
+
 **Important**: Never commit secrets or credentials to the repository. Always use GitHub Secrets.
 
 ### Reporting Security Issues
