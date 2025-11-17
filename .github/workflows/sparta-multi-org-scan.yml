@@ -1,0 +1,298 @@
+name: Sparta - Multi-Organization Vulnerability Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      github-orgs:
+        description: 'Comma-separated list of GitHub organizations to scan'
+        required: true
+        type: string
+      batch-size:
+        description: 'Number of repositories per batch (default: 100)'
+        required: false
+        type: string
+        default: '100'
+  schedule:
+    # Run daily at 3 AM UTC (after single-org scan at 2 AM)
+    - cron: '0 3 * * *'
+
+env:
+  BATCH_SIZE: ${{ inputs.batch-size || '100' }}
+  MAX_RETRIES: '3'
+
+jobs:
+  get-repos:
+    name: Get All Organization Repositories
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      total-repos: ${{ steps.get-repos.outputs.count }}
+      total-orgs: ${{ steps.get-repos.outputs.orgs }}
+      matrix: ${{ steps.batch-repos.outputs.matrix }}
+      total-batches: ${{ steps.batch-repos.outputs.total_batches }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SPARTA_APP_ID }}
+          private-key: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Mask token and set environment
+        id: mask-token
+        env:
+          GENERATED_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          if [ -z "$GENERATED_TOKEN" ]; then
+            echo "GitHub App token generation failed" >&2
+            exit 1
+          fi
+          echo "::add-mask::$GENERATED_TOKEN"
+          echo "GITHUB_APP_TOKEN=$GENERATED_TOKEN" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get all organization repositories
+        id: get-repos
+        env:
+          GITHUB_ORGS: ${{ inputs.github-orgs || github.event.inputs.github-orgs || github.repository_owner }}
+          GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${{ github.workspace }}":/workspace \
+            -v "${{ github.output }}":/github_output \
+            -w /workspace \
+            -e GITHUB_ORGS \
+            -e GITHUB_APP_TOKEN \
+            -e GITHUB_OUTPUT=/github_output \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            get-repos
+        continue-on-error: false
+
+      - name: Split repositories into batches
+        id: batch-repos
+        env:
+          BATCH_SIZE: ${{ env.BATCH_SIZE }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${{ github.workspace }}":/workspace \
+            -v "${{ github.output }}":/github_output \
+            -w /workspace \
+            -e BATCH_SIZE \
+            -e GITHUB_OUTPUT=/github_output \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            batch-repos
+
+      - name: Upload repos and batches
+        uses: actions/upload-artifact@v4
+        with:
+          name: repos-and-batches
+          path: |
+            repos.json
+            repo-batches.json
+          retention-days: 1
+
+  scan-batches:
+    name: Scan Batch ${{ matrix.batch_id }}
+    needs: get-repos
+    runs-on: ubuntu-latest
+    if: needs.get-repos.outputs.total-batches > 0
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.get-repos.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SPARTA_APP_ID }}
+          private-key: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Mask token and set environment
+        id: mask-token
+        env:
+          GENERATED_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          if [ -z "$GENERATED_TOKEN" ]; then
+            echo "GitHub App token generation failed" >&2
+            exit 1
+          fi
+          echo "::add-mask::$GENERATED_TOKEN"
+          echo "GITHUB_APP_TOKEN=$GENERATED_TOKEN" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download repos and batches
+        uses: actions/download-artifact@v4
+        with:
+          name: repos-and-batches
+          path: .
+
+      - name: Extract batch repositories
+        id: extract-batch
+        env:
+          BATCH_ID: ${{ matrix.batch_id }}
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          
+          batch_id = os.environ.get('BATCH_ID')
+          if not batch_id:
+              print("Error: BATCH_ID environment variable not set")
+              exit(1)
+          
+          with open('repo-batches.json', 'r') as f:
+              batches = json.load(f)
+          
+          batch = next((b for b in batches if b['batch_id'] == batch_id), None)
+          if not batch:
+              print(f"Error: Batch {batch_id} not found")
+              exit(1)
+          
+          # Create repos.json with only this batch's repos
+          with open('repos.json', 'w') as f:
+              json.dump(batch['repos'], f, indent=2)
+          
+          # Determine org name
+          org_name = batch.get('org', 'unknown')
+          
+          print(f"Batch {batch_id} contains {len(batch['repos'])} repositories")
+          print(f"Organization: {org_name}")
+          
+          # Set outputs
+          github_output = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
+          with open(github_output, 'a') as f:
+              f.write(f"org={org_name}\n")
+              f.write(f"repo_count={len(batch['repos'])}\n")
+          EOF
+          echo "BATCH_ID=${{ matrix.batch_id }}" >> $GITHUB_ENV
+
+      - name: Scan batch repositories
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${{ github.workspace }}":/workspace \
+            -w /workspace \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_APP_TOKEN \
+            -e GITHUB_WORKSPACE=/workspace \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            scan-repos
+
+      - name: Upload batch scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-results-${{ matrix.batch_id }}
+          path: vulnerability-reports/
+          retention-days: 7
+
+  commit-results:
+    name: Commit Scan Results
+    needs: [get-repos, scan-batches]
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      contents: write
+      pull-requests: read
+      packages: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SPARTA_APP_ID }}
+          private-key: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Mask token and set environment
+        id: mask-token
+        env:
+          GENERATED_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          if [ -z "$GENERATED_TOKEN" ]; then
+            echo "GitHub App token generation failed" >&2
+            exit 1
+          fi
+          echo "::add-mask::$GENERATED_TOKEN"
+          echo "GITHUB_APP_TOKEN=$GENERATED_TOKEN" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all scan results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: scan-results-*
+          merge-multiple: true
+          path: vulnerability-reports/
+
+      - name: Commit scan results
+        env:
+          GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${{ github.workspace }}":/workspace \
+            -w /workspace \
+            -e GITHUB_APP_TOKEN \
+            -e GITHUB_REPOSITORY \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            commit-results
+
+      - name: Workflow Summary
+        if: always()
+        run: |
+          echo "## Multi-Organization Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Organizations**: ${{ needs.get-repos.outputs.total-orgs }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Repositories**: ${{ needs.get-repos.outputs.total-repos }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Batches**: ${{ needs.get-repos.outputs.total-batches }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Batch Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Batch ID | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          ${{ join(needs.scan-batches.*.result, '') }}
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scan results have been committed to the repository." >> $GITHUB_STEP_SUMMARY
+

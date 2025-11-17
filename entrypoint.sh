@@ -27,6 +27,12 @@ case "$COMMAND" in
     aggregate-scans)
         python3 /app/scripts/aggregate-scans.py
         ;;
+    batch-repos)
+        python3 /app/scripts/batch_repos.py
+        ;;
+    scan-state)
+        python3 /app/scripts/scan_state.py "${@:2}"
+        ;;
     help|--help|-h)
         echo "Sparta - Vulnerability Scanning Tool"
         echo ""
@@ -38,11 +44,16 @@ case "$COMMAND" in
         echo "  commit-results     Commit scan results to repository"
         echo "  query-cve [CVE]    Query for specific CVE across all scans"
         echo "  aggregate-scans    Aggregate and index scan results"
+        echo "  batch-repos        Split repositories into batches for parallel processing"
+        echo "  scan-state [cmd]   Manage scan state (init, completed, failed, summary)"
         echo "  help              Show this help message"
         echo ""
         echo "Environment variables:"
-        echo "  GITHUB_ORG         GitHub organization name"
+        echo "  GITHUB_ORG         GitHub organization name (single org)"
+        echo "  GITHUB_ORGS        GitHub organization names (comma-separated, multi-org)"
         echo "  GITHUB_APP_TOKEN   GitHub App installation token"
+        echo "  BATCH_SIZE         Batch size for parallel processing (default: 100)"
+        echo "  MAX_RETRIES        Maximum retry attempts for failed repos (default: 3)"
         echo "  GITHUB_REPOSITORY  Current repository (org/repo)"
         echo "  GITHUB_WORKSPACE   Workspace directory (for Trivy cache)"
         echo "  REPORTS_DIR        Directory for vulnerability reports (default: vulnerability-reports)"

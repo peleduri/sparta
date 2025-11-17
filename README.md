@@ -1,6 +1,5 @@
 # Sparta
 
-[![Public Repository](https://img.shields.io/badge/repository-public-brightgreen)](https://github.com/peleduri/sparta)
 
 This repository contains GitHub Actions workflows for scanning package vulnerabilities using Trivy across your GitHub organization.
 
@@ -16,6 +15,16 @@ This solution provides:
 4. **Aggregation Workflow** - A reusable workflow to aggregate and index scan results for reporting
 
 ## Components
+
+### Overview
+
+Sparta provides multiple workflows for different use cases:
+
+1. **Reusable Workflow** - PR vulnerability checks
+2. **Daily Organization Scan** - Single org daily scanning (backward compatible)
+3. **Multi-Organization Scan** - Multi-org scanning with batching and state management (NEW)
+4. **CVE Query Workflow** - Search for specific CVEs
+5. **Aggregation Workflow** - Aggregate and index scan results
 
 ### 1. Reusable Workflow for PR Checks
 
@@ -79,6 +88,7 @@ This workflow runs daily (at 2 AM UTC) and scans all repositories in your GitHub
 - Stores results in `vulnerability-reports/{org}/{repo}/{date}/trivy-report.json`
 - Commits scan results back to the repository
 - Handles errors gracefully (timeouts, access issues, etc.)
+- **Backward compatible** - works with single organization
 
 #### Manual Trigger
 
@@ -100,6 +110,114 @@ vulnerability-reports/
         └── {date}/
             └── trivy-report.json
 ```
+
+### 2.5. Multi-Organization Scan (NEW)
+
+**File**: `.github/workflows/sparta-multi-org-scan.yml`
+
+This workflow supports scanning multiple GitHub organizations in a single run, with advanced features for large organizations (6k+ repositories).
+
+#### Features
+
+- **Multi-organization support**: Scan multiple orgs in one workflow run
+- **Batch processing**: Automatically splits large orgs into batches for parallel processing
+- **State management**: Tracks scan progress with resume capability
+- **Enhanced error handling**: Automatic retry with exponential backoff for transient failures
+- **Scalable**: Handles organizations with 6k+ repositories via matrix strategy
+
+#### Usage
+
+**Manual Trigger with Multiple Organizations:**
+
+```yaml
+# Trigger from GitHub Actions UI or via workflow_dispatch
+# Input: github-orgs: "org1,org2,org3"
+# Optional: batch-size: "100" (default: 100 repos per batch)
+```
+
+**Scheduled Run:**
+
+The workflow runs daily at 3 AM UTC (after single-org scan at 2 AM). Configure organizations via workflow inputs or environment variables.
+
+#### Configuration
+
+**Environment Variables:**
+
+- `GITHUB_ORGS`: Comma-separated list of organizations (e.g., `org1,org2,org3`)
+- `GITHUB_ORG`: Single organization (backward compatible, used if `GITHUB_ORGS` not set)
+- `BATCH_SIZE`: Number of repositories per batch (default: 100)
+- `MAX_RETRIES`: Maximum retry attempts for failed repos (default: 3)
+
+**Example:**
+
+```yaml
+env:
+  GITHUB_ORGS: "org1,org2,org3"
+  BATCH_SIZE: "100"
+  MAX_RETRIES: "3"
+```
+
+#### How It Works
+
+1. **Get Repositories**: Fetches all repos from specified organizations
+2. **Create Batches**: Splits repos into batches (configurable size, default 100)
+3. **Parallel Scanning**: Uses GitHub Actions matrix strategy to scan batches in parallel
+4. **State Tracking**: Maintains state files for progress tracking and resume capability
+5. **Error Recovery**: Automatically retries transient failures (network, timeouts, rate limits)
+6. **Commit Results**: Merges all batch results and commits to repository
+
+#### Directory Structure
+
+Multi-org scans create the same directory structure, organized by organization:
+
+```
+vulnerability-reports/
+├── org1/
+│   └── {repo}/
+│       └── {date}/
+│           └── trivy-report.json
+├── org2/
+│   └── {repo}/
+│       └── {date}/
+│           └── trivy-report.json
+└── org3/
+    └── {repo}/
+        └── {date}/
+            └── trivy-report.json
+```
+
+#### State Management
+
+The workflow maintains state files (`scan-state-{org}-{date}.json`) that track:
+- Completed repositories
+- Failed repositories (with error messages and retry counts)
+- Pending repositories
+- Batch status
+
+This enables:
+- **Resume capability**: If a workflow fails, it can resume from where it left off
+- **Retry logic**: Failed repos are automatically retried (up to MAX_RETRIES)
+- **Progress tracking**: Monitor scan progress in real-time
+
+#### Error Handling
+
+- **Transient errors** (network, timeouts, rate limits): Automatically retried with exponential backoff
+- **Permanent errors** (authentication, invalid repos): Logged and skipped
+- **Partial completion**: Results are committed even if some repos fail
+- **State persistence**: Failed repos are tracked for retry in subsequent runs
+
+#### Large Organization Support
+
+For organizations with 6k+ repositories:
+- Automatically creates batches (e.g., 60+ batches for 6000 repos with batch size 100)
+- Uses GitHub Actions matrix strategy for parallel processing
+- Each batch runs independently, reducing total scan time
+- State files track progress across all batches
+
+#### Requirements
+
+- Same as Daily Organization Scan (GitHub App with appropriate permissions)
+- GitHub Actions with matrix strategy support (available on all plans)
 
 ### 3. CVE Query Workflow
 
@@ -359,14 +477,33 @@ The aggregation workflow requires:
 
 ## Customization
 
+### Choosing Between Single-Org and Multi-Org Scans
+
+**Use Single-Org Scan** (`.github/workflows/sparta-daily-org-scan.yml`) when:
+- Scanning one organization
+- You want simple, straightforward scanning
+- You don't need batching or state management
+
+**Use Multi-Org Scan** (`.github/workflows/sparta-multi-org-scan.yml`) when:
+- Scanning multiple organizations
+- Organization has 500+ repositories (benefits from batching)
+- You need resume capability and state tracking
+- You want enhanced error handling with retries
+
 ### Changing Scan Schedule
 
-Edit `.github/workflows/sparta-daily-org-scan.yml` and modify the cron schedule:
-
+**Single-Org Scan**: Edit `.github/workflows/sparta-daily-org-scan.yml`:
 ```yaml
 on:
   schedule:
     - cron: '0 2 * * *'  # Change to your preferred time
+```
+
+**Multi-Org Scan**: Edit `.github/workflows/sparta-multi-org-scan.yml`:
+```yaml
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Change to your preferred time
 ```
 
 ### Adjusting Severity Levels
@@ -399,6 +536,28 @@ By default, all scan results are kept. To implement retention, you can:
 - Verify the workflow is enabled in the repository
 - Check GitHub Actions permissions for the organization
 - Review workflow logs for authentication or permission errors
+
+### Multi-Org Scan Issues
+
+**Workflow fails to start:**
+- Verify `GITHUB_ORGS` or `GITHUB_ORG` is set correctly
+- Check that organizations are comma-separated (no spaces or with spaces trimmed)
+- Verify GitHub App has access to all specified organizations
+
+**Batches not processing:**
+- Check that `repo-batches.json` is created correctly
+- Verify matrix strategy is working (check workflow logs)
+- Ensure batch size is appropriate (not too large for GitHub Actions limits)
+
+**State not persisting:**
+- Verify state files are being created (`scan-state-{org}-{date}.json`)
+- Check that state files are committed to repository
+- Ensure resume logic is working correctly
+
+**Retries not working:**
+- Check `MAX_RETRIES` environment variable is set
+- Verify errors are being detected as transient (network, timeout, rate limit)
+- Review retry logs in workflow output
 
 ### CVE Query Returns No Results
 
@@ -489,9 +648,29 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 [Add your license here]
 
+## Recent Updates
+
+### v1.3.0 - Multi-Organization Support
+
+**New Features:**
+- ✅ Multi-organization scanning support
+- ✅ Batch processing for large organizations (6k+ repos)
+- ✅ State management with resume capability
+- ✅ Enhanced error handling with automatic retries
+- ✅ Exponential backoff for transient failures
+- ✅ Parallel batch processing via matrix strategy
+
+**Backward Compatibility:**
+- ✅ Single-org mode still works (GITHUB_ORG)
+- ✅ All existing workflows continue to function
+- ✅ No breaking changes
+
+**See**: [GitHub Issue #4](https://github.com/peleduri/sparta/issues/4) for details
+
 ## References
 
 - [Trivy Documentation](https://aquasecurity.github.io/trivy/)
 - [Trivy GitHub Action](https://github.com/marketplace/actions/aqua-security-trivy)
 - [GitHub Actions Reusable Workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
+- [GitHub Actions Matrix Strategy](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs)
 
