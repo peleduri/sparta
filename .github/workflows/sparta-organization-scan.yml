@@ -80,6 +80,13 @@ jobs:
           # SPARTA_APP_PRIVATE_KEY_ORG1: ${{ secrets.SPARTA_APP_PRIVATE_KEY_ORG1 }}
           # Replace ORG1 with the normalized org name (uppercase, underscores)
         run: |
+          # Build list of per-org credential environment variables to pass to Docker
+          # Extract only variable names (not values) to safely handle multi-line values like private keys
+          PER_ORG_ENV_ARGS=""
+          for var in $(env | grep '^SPARTA_APP_' | cut -d'=' -f1); do
+            PER_ORG_ENV_ARGS="$PER_ORG_ENV_ARGS -e $var"
+          done
+          
           docker run --rm \
             --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
@@ -91,7 +98,7 @@ jobs:
             -e GITHUB_APP_TOKEN \
             -e BATCH_SIZE \
             -e MAX_RETRIES \
-            $(env | grep '^SPARTA_APP_' | sed 's/^/-e /' | tr '\n' ' ') \
+            $PER_ORG_ENV_ARGS \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
             orchestrate-scan \
             --orgs "${{ inputs.github-orgs || github.repository_owner }}" \
