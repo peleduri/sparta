@@ -30,6 +30,7 @@ jobs:
     outputs:
       total-repos: ${{ steps.get-repos.outputs.count }}
       total-orgs: ${{ steps.get-repos.outputs.orgs }}
+      needs-batching: ${{ steps.detect-batching.outputs.needs_batching }}
       matrix: ${{ steps.batch-repos.outputs.matrix }}
       total-batches: ${{ steps.batch-repos.outputs.total_batches }}
     steps:
@@ -81,8 +82,47 @@ jobs:
             get-repos
         continue-on-error: false
 
+      - name: Auto-detect large orgs and enable batching
+        id: detect-batching
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          
+          with open('repos.json', 'r') as f:
+              repos_data = json.load(f)
+          
+          # Check if multi-org format
+          is_multi_org = (
+              isinstance(repos_data, list) and 
+              len(repos_data) > 0 and 
+              isinstance(repos_data[0], dict) and 
+              'org' in repos_data[0] and 
+              'repos' in repos_data[0]
+          )
+          
+          if is_multi_org:
+              large_orgs = []
+              for org_data in repos_data:
+                  if len(org_data.get('repos', [])) > 500:
+                      large_orgs.append(org_data['org'])
+              needs_batching = len(large_orgs) > 0
+              github_output = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
+              with open(github_output, 'a') as f:
+                  f.write(f"needs_batching={'true' if needs_batching else 'false'}\n")
+                  f.write(f"large_orgs={','.join(large_orgs)}\n")
+          else:
+              # Single org format
+              repos = repos_data if isinstance(repos_data, list) else []
+              needs_batching = len(repos) > 500
+              github_output = os.environ.get('GITHUB_OUTPUT', '/dev/stdout')
+              with open(github_output, 'a') as f:
+                  f.write(f"needs_batching={'true' if needs_batching else 'false'}\n")
+          EOF
+
       - name: Split repositories into batches
         id: batch-repos
+        if: steps.detect-batching.outputs.needs_batching == 'true'
         env:
           BATCH_SIZE: ${{ env.BATCH_SIZE }}
         run: |
@@ -95,6 +135,13 @@ jobs:
             -e GITHUB_OUTPUT=/github_output \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
             batch-repos
+      
+      - name: Set default batch outputs
+        if: steps.detect-batching.outputs.needs_batching != 'true'
+        run: |
+          github_output="${{ github.output }}"
+          echo "matrix=[]" >> "$github_output"
+          echo "total_batches=0" >> "$github_output"
 
       - name: Upload repos and batches
         uses: actions/upload-artifact@v4
@@ -103,13 +150,15 @@ jobs:
           path: |
             repos.json
             repo-batches.json
+            scan-state-*.json
           retention-days: 1
+          if-no-files-found: ignore
 
   scan-batches:
     name: Scan Batch ${{ matrix.batch_id }}
-    needs: get-repos
+    needs: [get-repos]
     runs-on: ubuntu-latest
-    if: needs.get-repos.outputs.total-batches > 0
+    if: needs.get-repos.outputs.needs-batching == 'true' && needs.get-repos.outputs.total-batches != '' && needs.get-repos.outputs.total-batches > 0
     strategy:
       fail-fast: false
       matrix:
@@ -162,6 +211,7 @@ jobs:
           python3 << 'EOF'
           import json
           import os
+          from datetime import datetime
           
           batch_id = os.environ.get('BATCH_ID')
           if not batch_id:
@@ -176,12 +226,16 @@ jobs:
               print(f"Error: Batch {batch_id} not found")
               exit(1)
           
-          # Create repos.json with only this batch's repos
+          # Determine org name
+          org_name = batch.get('org', 'unknown')
+          
+          # Create repos.json in single-org format for this batch
+          # (scan_repos.py will handle it correctly)
           with open('repos.json', 'w') as f:
               json.dump(batch['repos'], f, indent=2)
           
-          # Determine org name
-          org_name = batch.get('org', 'unknown')
+          # Set GITHUB_ORG for single-org mode
+          os.environ['GITHUB_ORG'] = org_name
           
           print(f"Batch {batch_id} contains {len(batch['repos'])} repositories")
           print(f"Organization: {org_name}")
@@ -193,20 +247,27 @@ jobs:
               f.write(f"repo_count={len(batch['repos'])}\n")
           EOF
           echo "BATCH_ID=${{ matrix.batch_id }}" >> $GITHUB_ENV
+          echo "GITHUB_ORG=${{ steps.extract-batch.outputs.org }}" >> $GITHUB_ENV
 
       - name: Scan batch repositories
         env:
+          GITHUB_ORG: ${{ steps.extract-batch.outputs.org }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
+          BATCH_SIZE: ${{ env.BATCH_SIZE }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
         run: |
           docker run --rm \
             --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
             -w /workspace \
+            -e GITHUB_ORG \
             -e GITHUB_REPOSITORY \
             -e GITHUB_APP_TOKEN \
             -e GITHUB_WORKSPACE=/workspace \
+            -e BATCH_SIZE \
+            -e MAX_RETRIES \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
             scan-repos
 
@@ -215,12 +276,91 @@ jobs:
         if: always()
         with:
           name: scan-results-${{ matrix.batch_id }}
-          path: vulnerability-reports/
+          path: |
+            vulnerability-reports/
+            scan-state-*.json
           retention-days: 7
+          if-no-files-found: ignore
+
+  scan-no-batch:
+    name: Scan All Repositories (No Batching)
+    needs: [get-repos]
+    runs-on: ubuntu-latest
+    if: needs.get-repos.outputs.needs-batching != 'true'
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate GitHub App token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SPARTA_APP_ID }}
+          private-key: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Mask token and set environment
+        id: mask-token
+        env:
+          GENERATED_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          if [ -z "$GENERATED_TOKEN" ]; then
+            echo "GitHub App token generation failed" >&2
+            exit 1
+          fi
+          echo "::add-mask::$GENERATED_TOKEN"
+          echo "GITHUB_APP_TOKEN=$GENERATED_TOKEN" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download repos
+        uses: actions/download-artifact@v4
+        with:
+          name: repos-and-batches
+          path: .
+
+      - name: Scan all repositories
+        env:
+          GITHUB_ORGS: ${{ inputs.github-orgs || github.event.inputs.github-orgs || github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${{ github.workspace }}":/workspace \
+            -w /workspace \
+            -e GITHUB_ORGS \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_APP_TOKEN \
+            -e GITHUB_WORKSPACE=/workspace \
+            -e MAX_RETRIES \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            scan-repos
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-results-no-batch
+          path: |
+            vulnerability-reports/
+            scan-state-*.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   commit-results:
     name: Commit Scan Results
-    needs: [get-repos, scan-batches]
+    needs: [get-repos, scan-batches, scan-no-batch]
     runs-on: ubuntu-latest
     if: always()
     permissions:
@@ -263,13 +403,23 @@ jobs:
         with:
           pattern: scan-results-*
           merge-multiple: true
-          path: vulnerability-reports/
+          path: .
+          if-no-files-found: ignore
+      
+      - name: Download no-batch scan results
+        uses: actions/download-artifact@v4
+        if: always()
+        with:
+          name: scan-results-no-batch
+          path: .
+          if-no-files-found: ignore
 
-      - name: Commit scan results
+      - name: Commit scan results and state files
         env:
           GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
+          # Commit state files along with scan results
           docker run --rm \
             --user $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/workspace \
@@ -278,6 +428,15 @@ jobs:
             -e GITHUB_REPOSITORY \
             ghcr.io/${{ github.repository_owner }}/sparta:latest \
             commit-results
+          
+          # Also commit state files if they exist
+          if [ -f scan-state-*.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add scan-state-*.json || true
+            git commit -m "Update scan state files" || true
+            git push origin main || true
+          fi
 
       - name: Workflow Summary
         if: always()

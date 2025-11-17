@@ -333,12 +333,35 @@ def main():
             if STATE_MANAGEMENT_AVAILABLE:
                 try:
                     scan_state = ScanState(org_name, scan_date)
-                    scan_state.initialize(len(repos), repos)
+                    # Only initialize if state is new (no existing state)
+                    if not scan_state.state_file.exists() or len(scan_state.get_completed_repos()) == 0:
+                        scan_state.initialize(len(repos), repos)
+                    else:
+                        # Resume mode: update pending repos from current repos list
+                        completed = set(scan_state.get_completed_repos())
+                        repo_names = [validate_repo_name(repo['name']) for repo in repos]
+                        scan_state.state['pending_repos'] = [r for r in repo_names if r not in completed]
+                        scan_state.state['total_repos'] = len(repos)
+                        scan_state.save()
+                        print(f"Resuming scan: {len(completed)} already completed, {len(scan_state.state['pending_repos'])} pending")
                 except Exception as e:
                     print(f"Warning: Failed to initialize scan state: {sanitize_error_message(str(e), tokens_to_sanitize)}")
             
+            # Filter repos based on state (resume capability)
+            repos_to_scan = repos
+            if scan_state:
+                completed = set(scan_state.get_completed_repos())
+                failed_to_retry = {f['repo'] for f in scan_state.get_failed_repos()}
+                repos_to_scan = [
+                    repo for repo in repos
+                    if validate_repo_name(repo['name']) not in completed or validate_repo_name(repo['name']) in failed_to_retry
+                ]
+                skipped_count = len(repos) - len(repos_to_scan)
+                if skipped_count > 0:
+                    print(f"Skipping {skipped_count} already completed repository(ies)")
+            
             # Process repos for this org
-            for repo in repos:
+            for repo in repos_to_scan:
                 scan_repository(repo, org_name, reports_dir, scan_date, current_repo, installation_token, tokens_to_sanitize, scan_state)
             
             # Print summary if state management is available
@@ -395,11 +418,34 @@ def main():
         if STATE_MANAGEMENT_AVAILABLE:
             try:
                 scan_state = ScanState(org_name, scan_date)
-                scan_state.initialize(len(repos), repos)
+                # Only initialize if state is new (no existing state)
+                if not scan_state.state_file.exists() or len(scan_state.get_completed_repos()) == 0:
+                    scan_state.initialize(len(repos), repos)
+                else:
+                    # Resume mode: update pending repos from current repos list
+                    completed = set(scan_state.get_completed_repos())
+                    repo_names = [validate_repo_name(repo['name']) for repo in repos]
+                    scan_state.state['pending_repos'] = [r for r in repo_names if r not in completed]
+                    scan_state.state['total_repos'] = len(repos)
+                    scan_state.save()
+                    print(f"Resuming scan: {len(completed)} already completed, {len(scan_state.state['pending_repos'])} pending")
             except Exception as e:
                 print(f"Warning: Failed to initialize scan state: {sanitize_error_message(str(e), tokens_to_sanitize)}")
         
-        for repo in repos:
+        # Filter repos based on state (resume capability)
+        repos_to_scan = repos
+        if scan_state:
+            completed = set(scan_state.get_completed_repos())
+            failed_to_retry = {f['repo'] for f in scan_state.get_failed_repos()}
+            repos_to_scan = [
+                repo for repo in repos
+                if validate_repo_name(repo['name']) not in completed or validate_repo_name(repo['name']) in failed_to_retry
+            ]
+            skipped_count = len(repos) - len(repos_to_scan)
+            if skipped_count > 0:
+                print(f"Skipping {skipped_count} already completed repository(ies)")
+        
+        for repo in repos_to_scan:
             scan_repository(repo, org_name, reports_dir, scan_date, current_repo, installation_token, tokens_to_sanitize, scan_state)
         
         # Print summary if state management is available
