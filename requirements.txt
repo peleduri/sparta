@@ -18,3 +18,7 @@ pytest==8.3.4
 PyJWT==2.9.0
 cryptography==43.0.3
 
+# YAML parser for workflow tests
+# https://github.com/yaml/pyyaml/releases
+PyYAML==6.0.2
+
