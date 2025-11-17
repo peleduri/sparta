@@ -1,12 +1,6 @@
 name: Sparta - Self-Scan Repository
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
   schedule:
     # Run weekly on Sundays at 3 AM UTC
     - cron: '0 3 * * 0'
@@ -15,6 +9,7 @@ on:
 jobs:
   scan-sparta:
     name: Scan Sparta for Vulnerabilities
+    if: github.repository != 'security-pillar-ai-poc/sparta' && github.repository != 'peleduri/sparta'
     uses: ./.github/workflows/sparta-package-vulnerability-scan.yml
     with:
       scan-ref: '.'

@@ -1,9 +1,6 @@
 name: Sparta - Aggregate Scan Results
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       reports-dir:

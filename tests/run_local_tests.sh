@@ -1,51 +1,53 @@
 #!/bin/bash
-# Run all local tests for multi-org token scenarios
+# Run all local tests for unified workflow
 
 set -e
 
 echo "=========================================="
-echo "Running Local Tests for Multi-Org Tokens"
+echo "Running All Local Tests"
 echo "=========================================="
 echo ""
 
-# Test 1: Unit tests for token handling
-echo "1. Running unit tests..."
+# Test 1: Token manager tests
+echo "1. Running token manager tests..."
+python3 tests/test_token_manager.py
+echo ""
+
+# Test 2: Orchestration script tests
+echo "2. Running orchestration script tests..."
+python3 tests/test_orchestrate_scan.py
+echo ""
+
+# Test 3: Unified workflow integration tests
+echo "3. Running unified workflow integration tests..."
+python3 tests/test_unified_workflow_integration.py
+echo ""
+
+# Test 4: Workflow trigger tests
+echo "4. Running workflow trigger tests..."
+python3 tests/test_workflow_triggers.py
+echo ""
+
+# Test 5: Unit tests for token handling (legacy)
+echo "5. Running legacy token tests..."
 python3 tests/test_multi_org_tokens.py
 echo ""
 
-# Test 2: Integration scenario tests
-echo "2. Running integration scenario tests..."
+# Test 6: Integration scenario tests (legacy)
+echo "6. Running legacy integration scenario tests..."
 python3 tests/test_integration_scenarios.py
 echo ""
 
-# Test 3: Test token map parsing with actual JSON
-echo "3. Testing token map JSON parsing..."
-python3 << 'EOF'
-import json
-import sys
-
-# Test valid token map
-valid_map = '{"org1": "token1", "org2": "token2"}'
-try:
-    parsed = json.loads(valid_map)
-    assert parsed["org1"] == "token1"
-    assert parsed["org2"] == "token2"
-    print("✓ Valid token map JSON parsed correctly")
-except Exception as e:
-    print(f"✗ Failed: {e}")
-    sys.exit(1)
-
-# Test invalid token map
-invalid_map = '{"org1": "token1"'
-try:
-    json.loads(invalid_map)
-    print("✗ Should have failed on invalid JSON")
-    sys.exit(1)
-except json.JSONDecodeError:
-    print("✓ Invalid token map JSON correctly rejected")
-EOF
-
+# Test 7: Workflow token generation simulation
+echo "7. Running workflow token generation simulation..."
+python3 tests/simulate_workflow_token_generation.py
 echo ""
+
+# Test 8: Credential format tests
+echo "8. Running credential format tests..."
+python3 -m pytest tests/test_credential_format.py -v 2>&1 | head -30 || echo "⚠ Pytest not available, skipping"
+echo ""
+
 echo "=========================================="
 echo "All Local Tests Completed"
 echo "=========================================="

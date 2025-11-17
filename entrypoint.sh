@@ -33,6 +33,9 @@ case "$COMMAND" in
     scan-state)
         python3 /app/scripts/scan_state.py "${@:2}"
         ;;
+    orchestrate-scan)
+        python3 /app/scripts/orchestrate_scan.py "${@:2}"
+        ;;
     help|--help|-h)
         echo "Sparta - Vulnerability Scanning Tool"
         echo ""
@@ -46,6 +49,7 @@ case "$COMMAND" in
         echo "  aggregate-scans    Aggregate and index scan results"
         echo "  batch-repos        Split repositories into batches for parallel processing"
         echo "  scan-state [cmd]   Manage scan state (init, completed, failed, summary)"
+        echo "  orchestrate-scan   Run complete scan orchestration (single or multi-org)"
         echo "  help              Show this help message"
         echo ""
         echo "Environment variables:"

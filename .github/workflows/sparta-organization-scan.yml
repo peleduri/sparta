@@ -1,0 +1,87 @@
+name: Sparta - Organization Vulnerability Scan
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      github-orgs:
+        description: 'Comma-separated list of GitHub organizations to scan (defaults to repository owner if not provided)'
+        required: false
+        type: string
+      batch-size:
+        description: 'Number of repositories per batch (default: 100)'
+        required: false
+        type: string
+        default: '100'
+
+env:
+  BATCH_SIZE: ${{ inputs.batch-size || '100' }}
+  MAX_RETRIES: '3'
+
+jobs:
+  scan:
+    name: Scan Organizations
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+      packages: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate GitHub App token (for repository owner)
+        id: generate-base-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SPARTA_APP_ID }}
+          private-key: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Mask token and set environment
+        run: |
+          echo "::add-mask::${{ steps.generate-base-token.outputs.token }}"
+          echo "GITHUB_APP_TOKEN=${{ steps.generate-base-token.outputs.token }}" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run organization scan
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+          SPARTA_APP_ID: ${{ secrets.SPARTA_APP_ID }}
+          SPARTA_APP_PRIVATE_KEY: ${{ secrets.SPARTA_APP_PRIVATE_KEY }}
+          GITHUB_APP_TOKEN: ${{ env.GITHUB_APP_TOKEN }}
+          BATCH_SIZE: ${{ env.BATCH_SIZE }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${{ github.workspace }}":/workspace \
+            -w /workspace \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_WORKSPACE=/workspace \
+            -e SPARTA_APP_ID \
+            -e SPARTA_APP_PRIVATE_KEY \
+            -e GITHUB_APP_TOKEN \
+            -e BATCH_SIZE \
+            -e MAX_RETRIES \
+            ghcr.io/${{ github.repository_owner }}/sparta:latest \
+            orchestrate-scan \
+            --orgs "${{ inputs.github-orgs || github.repository_owner }}" \
+            --batch-size "${{ env.BATCH_SIZE }}" \
+            --max-retries "${{ env.MAX_RETRIES }}"
+
+  aggregate:
+    name: Aggregate Scan Results
+    needs: scan
+    if: success()
+    uses: ./.github/workflows/sparta-aggregate-scans.yml
+    secrets: inherit
